@@ -13,3 +13,13 @@ struct AppBackdrop: View {
         }.ignoresSafeArea().accessibilityHidden(true)
     }
 }
+
+extension View {
+    /// 与补丁中的根视图调用保持一致；背景图片由环境中的 LedgerStore 提供。
+    func appBackdrop() -> some View { modifier(AppBackdropModifier()) }
+}
+
+private struct AppBackdropModifier: ViewModifier {
+    @EnvironmentObject private var store: LedgerStore
+    func body(content: Content) -> some View { ZStack { AppBackdrop(imageData: store.backgroundImageData); content } }
+}

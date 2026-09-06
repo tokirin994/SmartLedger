@@ -12,13 +12,13 @@ struct DashboardView: View {
     var body: some View { ScrollView { VStack(alignment: .leading, spacing: 20) {
         HStack { Text("概览").font(.largeTitle.bold()); Spacer(); Button { showCalendar = true } label: { Image(systemName: "calendar") }; Button { store.save() } label: { Image(systemName: "arrow.clockwise") } }.padding(.horizontal)
         VStack(alignment: .leading, spacing: 12) { Text("统计筛选").font(.headline); Text("\(interval.start.formatted(date: .numeric, time: .omitted)) ~ \(interval.end.addingTimeInterval(-1).formatted(date: .numeric, time: .omitted))").foregroundStyle(.secondary); HStack { ForEach(DashboardRange.allCases) { value in Button { range = value } label: { FilterChip(title: value.title, selected: range == value) } } } }.padding(.horizontal)
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { MetricCard(title: "总支出", value: expense, color: .orange, icon: "arrow.up.right"); MetricCard(title: "总收入", value: income, color: .green, icon: "arrow.down.left"); MetricCard(title: "结余", value: income-expense, color: .blue, icon: "banknote"); MetricCard(title: "预算剩余", value: max(0, store.budgets.reduce(0) { $0 + $1.limitAmount } - expense), color: .purple, icon: "gauge") }.padding(.horizontal)
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { DashboardMetricCard(title: "总支出", value: expense, color: .orange, icon: "arrow.up.right"); DashboardMetricCard(title: "总收入", value: income, color: .green, icon: "arrow.down.left"); DashboardMetricCard(title: "结余", value: income-expense, color: .blue, icon: "banknote"); DashboardMetricCard(title: "预算剩余", value: max(0, store.budgets.reduce(0) { $0 + $1.limitAmount } - expense), color: .purple, icon: "gauge") }.padding(.horizontal)
         GlassCard { VStack(alignment: .leading, spacing: 12) { HStack { Text("分类占比").font(.title3.bold()); Spacer(); Button(showBars ? "饼图" : "柱状图") { showBars.toggle() } }; CategoryChart(transactions: scoped, store: store, bars: showBars) } }.padding(.horizontal)
         GlassCard { VStack(alignment: .leading) { Text("收支趋势").font(.title3.bold()); TrendChart(transactions: scoped) } }.padding(.horizontal)
         GlassCard { VStack(alignment: .leading, spacing: 8) { Text("预算摘要").font(.title3.bold()); ForEach(store.budgets) { budget in BudgetSummaryRow(budget: budget, spent: store.expense(in: interval, categoryID: budget.categoryID)) } } }.padding(.horizontal)
     }.padding(.vertical) }.sheet(isPresented: $showCalendar) { FinanceCalendarSheet() }.navigationBarTitleDisplayMode(.inline) }
 }
-struct MetricCard: View { let title: String; let value: Double; let color: Color; let icon: String
+struct DashboardMetricCard: View { let title: String; let value: Double; let color: Color; let icon: String
     var body: some View { GlassCard { VStack(alignment: .leading, spacing: 10) { Label(title, systemImage: icon).foregroundStyle(color).font(.subheadline); Text(value.currency).font(.title2.bold()).minimumScaleFactor(0.6) } } }
 }
 struct CategoryChart: View { let transactions: [LedgerTransaction]; let store: LedgerStore; let bars: Bool

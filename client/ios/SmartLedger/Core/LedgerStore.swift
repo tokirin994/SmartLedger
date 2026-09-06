@@ -6,13 +6,13 @@ final class LedgerStore: ObservableObject {
     @Published var categories: [LedgerCategory] = []; @Published var books: [LedgerBook] = []; @Published var transactions: [LedgerTransaction] = []; @Published var budgets: [Budget] = []
     @Published var appearance: AppearanceMode = .system; @Published var recommendBooks = true; @Published var paymentMethods = ["微信支付", "支付宝", "银行卡", "现金"]
     @Published var backgroundImageData: Data?; @Published var appleProfile: AppleAccountProfile?; @Published var cloudSyncEnabled = false; @Published var cloudState: CloudSyncState = .disabled; @Published var cloudMessage = "本地数据优先"; @Published var cloudConflict: PersistedLedgerSnapshot?
-    private let key = "smartLedger.snapshot.v1"
+    private let snapshotStore = LocalSnapshotStore()
     init() { load(); loadPreferences() }
     var preferredColorScheme: ColorScheme? { appearance == .system ? nil : (appearance == .dark ? .dark : .light) }
-    func save() { let value = snapshot; if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: key) }; savePreferences() }
+    func save() { try? snapshotStore.save(snapshot); savePreferences() }
     var snapshot: PersistedLedgerSnapshot { PersistedLedgerSnapshot(categories: categories, books: books, transactions: transactions, budgets: budgets, updatedAt: Date()) }
     func apply(_ value: PersistedLedgerSnapshot) { categories = value.categories; books = value.books; transactions = value.transactions; budgets = value.budgets; save() }
-    func load() { guard let data = UserDefaults.standard.data(forKey: key), let value = try? JSONDecoder().decode(PersistedLedgerSnapshot.self, from: data) else { seed(); return }; categories = value.categories; books = value.books; transactions = value.transactions; budgets = value.budgets }
+    func load() { guard let value = try? snapshotStore.load(), let value else { seed(); return }; categories = value.categories; books = value.books; transactions = value.transactions; budgets = value.budgets }
     func add(_ transaction: LedgerTransaction) { transactions.append(transaction); save() }
     func update(_ transaction: LedgerTransaction) { guard let index = transactions.firstIndex(where: { $0.id == transaction.id }) else { return }; transactions[index] = transaction; save() }
     func delete(_ transaction: LedgerTransaction) { transactions.removeAll { $0.id == transaction.id }; save() }
@@ -29,6 +29,8 @@ final class LedgerStore: ObservableObject {
         transactions = [LedgerTransaction(title: "瑞幸咖啡", amount: 18, kind: .expense, happenedAt: Date(), paymentMethod: "微信支付", source: "ocr", categoryID: coffee.id, bookIDs: [trip.id]), LedgerTransaction(title: "滴滴出行", amount: 35.5, kind: .expense, happenedAt: Date().addingTimeInterval(-86400), paymentMethod: "支付宝", categoryID: transport.id, bookIDs: [trip.id]), LedgerTransaction(title: "八月工资", amount: 19000, kind: .income, happenedAt: Date().addingTimeInterval(-86400*3), paymentMethod: "银行卡", categoryID: salary.id)]
         save()
     }
+    /// 对应补丁定义的启动引导：本地数据优先，启用同步后再刷新云状态。
+    func bootstrapIfNeeded() async { if transactions.isEmpty && categories.isEmpty { seed() }; if cloudSyncEnabled { await refreshCloudStatus() } }
     private func loadPreferences() { let defaults = UserDefaults.standard; appearance = AppearanceMode(rawValue: defaults.string(forKey: "smartLedger.appearance") ?? "system") ?? .system; recommendBooks = defaults.object(forKey: "smartLedger.recommendBooks") as? Bool ?? true; backgroundImageData = defaults.data(forKey: "smartLedger.background"); cloudSyncEnabled = defaults.bool(forKey: "smartLedger.cloudEnabled"); if let data = defaults.data(forKey: "smartLedger.appleProfile") { appleProfile = try? JSONDecoder().decode(AppleAccountProfile.self, from: data) }; cloudState = cloudSyncEnabled ? .idle : .disabled }
     private func savePreferences() { let defaults = UserDefaults.standard; defaults.set(appearance.rawValue, forKey: "smartLedger.appearance"); defaults.set(recommendBooks, forKey: "smartLedger.recommendBooks"); defaults.set(backgroundImageData, forKey: "smartLedger.background"); defaults.set(cloudSyncEnabled, forKey: "smartLedger.cloudEnabled"); if let appleProfile { defaults.set(try? JSONEncoder().encode(appleProfile), forKey: "smartLedger.appleProfile") } else { defaults.removeObject(forKey: "smartLedger.appleProfile") } }
     func refreshCloudStatus() async { guard cloudSyncEnabled else { cloudState = .disabled; return }; do { cloudState = try await CloudLedgerService.accountAvailable() ? .idle : .unavailable; cloudMessage = cloudState == .idle ? "iCloud 可用，等待同步" : "请登录 iCloud 后重试" } catch { cloudState = .failed; cloudMessage = error.localizedDescription } }

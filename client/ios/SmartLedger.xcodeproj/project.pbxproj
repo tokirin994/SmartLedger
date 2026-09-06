@@ -1,0 +1,437 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1AA6AF4F5C72CA31D /* CategoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1AA6AF4F5C72CA31D /* CategoryView.swift */; };
+		A3B87F5623A3D80B /* SyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B87F5623A3D80B /* SyncModels.swift */; };
+		2CB822D22657ED83 /* CreateCategoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CB822D22657ED83 /* CreateCategoryView.swift */; };
+		5C40D03694E52A96 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C40D03694E52A96 /* SettingsView.swift */; };
+		8E2B139EFE8E43A1 /* LocalDBService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E2B139EFE8E43A1 /* LocalDBService.swift */; };
+		B3EEDF4E594C04A1 /* CloudService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3EEDF4E594C04A1 /* CloudService.swift */; };
+		8B5D8C58A67B5427 /* TransactionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B5D8C58A67B5427 /* TransactionAnalysis.swift */; };
+		9A0B10D0A5F8E4D3 /* ReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0B10D0A5F8E4D3 /* ReportView.swift */; };
+		4C6F5B5A4C2D1E0F /* BudgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6F5B5A4C2D1E0F /* BudgetView.swift */; };
+		7D2A3B4C5D6E7F8A /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D2A3B4C5D6E7F8A /* AppSettings.swift */; };
+		3E4F5A6B7C8D9E0F /* MerchantsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4F5A6B7C8D9E0F /* MerchantsView.swift */; };
+		1A2B3C4D5E6F7A8B /* CategoryRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7A8B /* CategoryRowView.swift */; };
+		9C8B7A6F5E4D3C2B /* PaymentMethodView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8B7A6F5E4D3C2B /* PaymentMethodView.swift */; };
+		5D4C3B2A1F0E9D8C /* ColorPickerTile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D4C3B2A1F0E9D8C /* ColorPickerTile.swift */; };
+		6E5D4C3B2A1F0E9D /* HierarchicalCategoryPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5D4C3B2A1F0E9D /* HierarchicalCategoryPicker.swift */; };
+		8F9A0B1C2D3E4F5A /* LocalPushNotificationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9A0B1C2D3E4F5A /* LocalPushNotificationStore.swift */; };
+		7B6A5C4D3B2A1F0E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7B6A5C4D3B2A1F0E /* Assets.xcassets */; };
+		4A5B6C7D8E9F0A1B /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4A5B6C7D8E9F0A1B /* Preview Assets.xcassets */; };
+		2D3E4F5A6B7C8D9E /* LedgerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D3E4F5A6B7C8D9E /* LedgerStore.swift */; };
+		1C2D3E4F5A6B7C8D /* TransactionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C2D3E4F5A6B7C8D /* TransactionModel.swift */; };
+		8E9F0A1B2C3D4E5F /* CategoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E9F0A1B2C3D4E5F /* CategoryModel.swift */; };
+		3F4A5B6C7D8E9F0A /* BudgetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4A5B6C7D8E9F0A /* BudgetModel.swift */; };
+		9A0B1C2D3E4F5A6B /* MerchantModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0B1C2D3E4F5A6B /* MerchantModel.swift */; };
+		5C6D7E8F9A0B1C2D /* LocalAnalyticsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C6D7E8F9A0B1C2D /* LocalAnalyticsStore.swift */; };
+		7E8F9A0B1C2D3E4F /* TransactionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8F9A0B1C2D3E4F /* TransactionListView.swift */; };
+		2A3B4C5D6E7F8A9B /* AddTransactionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3B4C5D6E7F8A9B /* AddTransactionView.swift */; };
+		4D5E6F7A8B9C0D1E /* EditTransactionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5E6F7A8B9C0D1E /* EditTransactionView.swift */; };
+		6F7A8B9C0D1E2F3A /* InsightsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F7A8B9C0D1E2F3A /* InsightsView.swift */; };
+		1B2C3D4E5F6A7B8C /* SmartLedgerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B2C3D4E5F6A7B8C /* SmartLedgerApp.swift */; };
+		3C4D5E6F7A8B9C0D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4D5E6F7A8B9C0D /* ContentView.swift */; };
+		5E6F7A8B9C0D1E2F /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6F7A8B9C0D1E2F /* LoginView.swift */; };
+		8A9B0C1D2E3F4A5B /* CloudSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9B0C1D2E3F4A5B /* CloudSyncService.swift */; };
+		2C3D4E5F6A7B8C9D /* ConflictResolverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C3D4E5F6A7B8C9D /* ConflictResolverView.swift */; };
+		4F5A6B7C8D9E0F1A /* PaymentChannelSuggestionPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F5A6B7C8D9E0F1A /* PaymentChannelSuggestionPickerSheet.swift */; };
+		6A7B8C9D0E1F2A3B /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7B8C9D0E1F2A3B /* Components.swift */; };
+		8B9C0D1E2F3A4B5C /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B9C0D1E2F3A4B5C /* Views.swift */; };
+		1D2E3F4A5B6C7D8E /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D2E3F4A5B6C7D8E /* Models.swift */; };
+		3E4F5A6B7C8D9E0F /* Services.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4F5A6B7C8D9E0F /* Services.swift */; };
+		5A6B7C8D9E0F1A2B /* Utilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6B7C8D9E0F1A2B /* Utilities.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		807A861B00F401A30023A54B /* SmartLedger.app */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8B5D8C58A67B54270023A54B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8B5D8C58A67B54270023A54B;
+			remoteInfo = SmartLedger;
+		};
+		2D3E4F5A6B7C8D9E /* SmartLedgerTests.xctest */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8B5D8C58A67B54270023A54B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8B5D8C58A67B54270023A54B;
+			remoteInfo = SmartLedger;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		8B5D8C58A67B54270023A54B /* SmartLedger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartLedger.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1AA6AF4F5C72CA31D /* CategoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryView.swift; sourceTree = "<group>"; };
+		2CB822D22657ED83 /* CreateCategoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateCategoryView.swift; sourceTree = "<group>"; };
+		5C40D03694E52A96 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		8E2B139EFE8E43A1 /* LocalDBService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDBService.swift; sourceTree = "<group>"; };
+		B3EEDF4E594C04A1 /* CloudService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudService.swift; sourceTree = "<group>"; };
+		8B5D8C58A67B5427 /* TransactionAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionAnalysis.swift; sourceTree = "<group>"; };
+		9A0B10D0A5F8E4D3 /* ReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportView.swift; sourceTree = "<group>"; };
+		4C6F5B5A4C2D1E0F /* BudgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BudgetView.swift; sourceTree = "<group>"; };
+		7D2A3B4C5D6E7F8A /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		3E4F5A6B7C8D9E0F /* MerchantsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MerchantsView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7A8B /* CategoryRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryRowView.swift; sourceTree = "<group>"; };
+		9C8B7A6F5E4D3C2B /* PaymentMethodView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentMethodView.swift; sourceTree = "<group>"; };
+		5D4C3B2A1F0E9D8C /* ColorPickerTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorPickerTile.swift; sourceTree = "<group>"; };
+		6E5D4C3B2A1F0E9D /* HierarchicalCategoryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HierarchicalCategoryPicker.swift; sourceTree = "<group>"; };
+		8F9A0B1C2D3E4F5A /* LocalPushNotificationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPushNotificationStore.swift; sourceTree = "<group>"; };
+		7B6A5C4D3B2A1F0E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4A5B6C7D8E9F0A1B /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Preview Assets.xcassets; sourceTree = "<group>"; };
+		2D3E4F5A6B7C8D9E /* LedgerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LedgerStore.swift; sourceTree = "<group>"; };
+		1C2D3E4F5A6B7C8D /* TransactionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionModel.swift; sourceTree = "<group>"; };
+		8E9F0A1B2C3D4E5F /* CategoryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CategoryModel.swift; sourceTree = "<group>"; };
+		3F4A5B6C7D8E9F0A /* BudgetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BudgetModel.swift; sourceTree = "<group>"; };
+		9A0B1C2D3E4F5A6B /* MerchantModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MerchantModel.swift; sourceTree = "<group>"; };
+		5C6D7E8F9A0B1C2D /* LocalAnalyticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAnalyticsStore.swift; sourceTree = "<group>"; };
+		7E8F9A0B1C2D3E4F /* TransactionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionListView.swift; sourceTree = "<group>"; };
+		2A3B4C5D6E7F8A9B /* AddTransactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddTransactionView.swift; sourceTree = "<group>"; };
+		4D5E6F7A8B9C0D1E /* EditTransactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditTransactionView.swift; sourceTree = "<group>"; };
+		6F7A8B9C0D1E2F3A /* InsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightsView.swift; sourceTree = "<group>"; };
+		1B2C3D4E5F6A7B8C /* SmartLedgerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartLedgerApp.swift; sourceTree = "<group>"; };
+		3C4D5E6F7A8B9C0D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5E6F7A8B9C0D1E2F /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		8A9B0C1D2E3F4A5B /* CloudSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncService.swift; sourceTree = "<group>"; };
+		2C3D4E5F6A7B8C9D /* ConflictResolverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictResolverView.swift; sourceTree = "<group>"; };
+		4F5A6B7C8D9E0F1A /* PaymentChannelSuggestionPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentChannelSuggestionPickerSheet.swift; sourceTree = "<group>"; };
+		6A7B8C9D0E1F2A3B /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		8B9C0D1E2F3A4B5C /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+		1D2E3F4A5B6C7D8E /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		3E4F5A6B7C8D9E0F /* Services.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services.swift; sourceTree = "<group>"; };
+		5A6B7C8D9E0F1A2B /* Utilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Utilities.swift; sourceTree = "<group>"; };
+		807A861B00F401A30023A54B /* SmartLedgerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SmartLedgerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F6A7B8 /* SmartLedgerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartLedgerTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		8B5D8C58A67B54260023A54B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2D3E4F5A6B7C8D9F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		8B5D8C58A67B54270023A54B /* Project object */ = {
+			isa = PBXGroup;
+			children = (
+				8B5D8C58A67B54270023A54B /* SmartLedger */,
+				2D3E4F5A6B7C8D9E /* SmartLedgerTests */,
+				8B5D8C58A67B54270023A54B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				8B5D8C58A67B54270023A54B /* SmartLedger.app */,
+				807A861B00F401A30023A54B /* SmartLedgerTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* SmartLedger */ = {
+			isa = PBXGroup;
+			children = (
+				8B5D8C58A67B54270023A54B /* Components */,
+				8B5D8C58A67B54270023A54B /* Views */,
+				8B5D8C58A67B54270023A54B /* Models */,
+				8B5D8C58A67B54270023A54B /* Services */,
+				8B5D8C58A67B54270023A54B /* Utilities */,
+				7B6A5C4D3B2A1F0E /* Assets.xcassets */,
+				4A5B6C7D8E9F0A1B /* Preview Assets.xcassets */,
+			);
+			path = SmartLedger;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				6A7B8C9D0E1F2A3B /* Components.swift */,
+				5D4C3B2A1F0E9D8C /* ColorPickerTile.swift */,
+				6E5D4C3B2A1F0E9D /* HierarchicalCategoryPicker.swift */,
+				4F5A6B7C8D9E0F1A /* PaymentChannelSuggestionPickerSheet.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				1B2C3D4E5F6A7B8C /* SmartLedgerApp.swift */,
+				3C4D5E6F7A8B9C0D /* ContentView.swift */,
+				5E6F7A8B9C0D1E2F /* LoginView.swift */,
+				A1AA6AF4F5C72CA31D /* CategoryView.swift */,
+				2CB822D22657ED83 /* CreateCategoryView.swift */,
+				1A2B3C4D5E6F7A8B /* CategoryRowView.swift */,
+				5C40D03694E52A96 /* SettingsView.swift */,
+				9C8B7A6F5E4D3C2B /* PaymentMethodView.swift */,
+				7E8F9A0B1C2D3E4F /* TransactionListView.swift */,
+				2A3B4C5D6E7F8A9B /* AddTransactionView.swift */,
+				4D5E6F7A8B9C0D1E /* EditTransactionView.swift */,
+				9A0B10D0A5F8E4D3 /* ReportView.swift */,
+				4C6F5B5A4C2D1E0F /* BudgetView.swift */,
+				3E4F5A6B7C8D9E0F /* MerchantsView.swift */,
+				6F7A8B9C0D1E2F3A /* InsightsView.swift */,
+				2C3D4E5F6A7B8C9D /* ConflictResolverView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				1D2E3F4A5B6C7D8E /* Models.swift */,
+				2D3E4F5A6B7C8D9E /* LedgerStore.swift */,
+				1C2D3E4F5A6B7C8D /* TransactionModel.swift */,
+				8E9F0A1B2C3D4E5F /* CategoryModel.swift */,
+				3F4A5B6C7D8E9F0A /* BudgetModel.swift */,
+				9A0B1C2D3E4F5A6B /* MerchantModel.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				3E4F5A6B7C8D9E0F /* Services.swift */,
+				8E2B139EFE8E43A1 /* LocalDBService.swift */,
+				B3EEDF4E594C04A1 /* CloudService.swift */,
+				8F9A0B1C2D3E4F5A /* LocalPushNotificationStore.swift */,
+				5C6D7E8F9A0B1C2D /* LocalAnalyticsStore.swift */,
+				8A9B0C1D2E3F4A5B /* CloudSyncService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		8B5D8C58A67B54270023A54B /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				5A6B7C8D9E0F1A2B /* Utilities.swift */,
+				7D2A3B4C5D6E7F8A /* AppSettings.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		2D3E4F5A6B7C8D9E /* SmartLedgerTests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6A7B8 /* SmartLedgerTests.swift */,
+			);
+			path = SmartLedgerTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		8B5D8C58A67B54270023A54B /* SmartLedger */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8B5D8C58A67B54280023A54B /* Build configuration list for PBXNativeTarget "SmartLedger" */;
+			buildPhases = (
+				8B5D8C58A67B54260023A54B /* Sources */,
+				8B5D8C58A67B54260023A54B /* Frameworks */,
+				8B5D8C58A67B54270023A54B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SmartLedger;
+			packageProductDependencies = (
+			);
+			productName = SmartLedger;
+			productReference = 8B5D8C58A67B54270023A54B /* SmartLedger.app */;
+			productType = "com.apple.product-type.application";
+		};
+		2D3E4F5A6B7C8D9E /* SmartLedgerTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D3E4F5A6B7C8D9F /* Build configuration list for PBXNativeTarget "SmartLedgerTests" */;
+			buildPhases = (
+				2D3E4F5A6B7C8D9F /* Sources */,
+				2D3E4F5A6B7C8D9F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8B5D8C58A67B54280023A54B /* PBXTargetDependency */,
+			);
+			name = SmartLedgerTests;
+			packageProductDependencies = (
+			);
+			productName = SmartLedgerTests;
+			productReference = 807A861B00F401A30023A54B /* SmartLedgerTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		8B5D8C58A67B54270023A54B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					8B5D8C58A67B54270023A54B = {
+						CreatedOnToolsVersion = 15.0;
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					2D3E4F5A6B7C8D9E = {
+						CreatedOnToolsVersion = 15.0;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 8B5D8C58A67B54270023A54B;
+					};
+				};
+			};
+			buildConfigurationList = 8B5D8C58A67B54290023A54B /* Build configuration list for PBXProject "SmartLedger" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 8B5D8C58A67B54270023A54B /* Project object */;
+			packageReferences = (
+			);
+			productRefGroup = 8B5D8C58A67B54270023A54B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8B5D8C58A67B54270023A54B /* SmartLedger */,
+				2D3E4F5A6B7C8D9E /* SmartLedgerTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8B5D8C58A67B54270023A54B /* Resources */ = {
+			isa = PBXBuildConfiguration;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tok.smartledgerlocal;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		73728CBDE38FA4EBED2F3CCBC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tok.smartledgerlocal.tests;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = TESTING;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SmartLedger.app/SmartLedger";
+			};
+			name = Debug;
+		};
+		DD63B3B278FECCA93366EE97 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SmartLedger/SmartLedger.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = SmartLedger;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "需要读取相册截图用于 OCR 识别记账内容。";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
+				INFOPLIST_KEY_UISupportsIndirectInputEvents = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tok.smartledgerlocal;
+				PRODUCT_NAME = SmartLedger;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+/* Begin XCConfigurationList section */
+		0B7126A3F4AAF5A3CC35600C4 /* Build configuration list for PBXNativeTarget "SmartLedger" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C73D026F44A51A7DBADCD67F /* Debug */,
+				DD63B3B278FECCA93366EE97 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		15E90BDCFC95E3EAAD6DACAC5 /* Build configuration list for PBXProject "SmartLedger" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4AF5522DB5EF7A1B428173E6D /* Debug */,
+				581739399F19B8B32FAD3FB0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BD40480A1A4E42AAC69715F5 /* Build configuration list for PBXNativeTarget "SmartLedgerTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C4BF1186CA517721A328F0B6 /* Debug */,
+				73728CBDE38FA4EBED2F3CCBC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6359F7FD80FEB42D5251C980 /* Project object */;
+})
