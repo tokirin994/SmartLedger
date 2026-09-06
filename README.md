@@ -15,8 +15,12 @@
 ## 在 macOS / Xcode 中接入
 
 1. 新建一个 iOS App（SwiftUI，最低 iOS 17）。
-2. 把 `SmartLedgerLocal` 内的全部 `.swift` 文件加入同一个 Target。
+2. 把 `client/ios/SmartLedger` 内的全部 `.swift` 文件加入同一个 Target。
 3. 在 Target 的 Signing & Capabilities 中按需添加 `iCloud / CloudKit`、`Sign in with Apple`。
 4. 选择真机或模拟器编译运行。
 
 工程配置文件、签名、App 图标资产和 CloudKit 容器均依赖 Xcode 与 Apple Developer 配置，未在当前 Windows 环境生成。
+
+## 仓库目录
+
+Swift 源码现已按职责迁移至 `client/ios/SmartLedger/{Components,Core,Models,Services,Views}`，规格书与对齐清单位于 `client/ios/docs/`。
