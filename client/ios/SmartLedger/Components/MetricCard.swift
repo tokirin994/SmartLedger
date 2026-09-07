@@ -8,14 +8,7 @@ struct MetricCard: View {
     let color: Color
     let systemImage: String
 
-    init(
-        title: String,
-        value: String,
-        subtitle: String,
-        showSubtitle: Bool = false,
-        color: Color,
-        systemImage: String
-    ) {
+    init(title: String, value: String, subtitle: String, showSubtitle: Bool = false, color: Color, systemImage: String) {
         self.title = title
         self.value = value
         self.subtitle = subtitle
@@ -58,20 +51,3 @@ struct MetricCard: View {
         .shadow(color: .black.opacity(0.04), radius: 14, x: 0, y: 8)
     }
 }
-
-#if DEBUG
-struct MetricCard_Previews: PreviewProvider {
-    static var previews: some View {
-        MetricCard(
-            title: "本月支出",
-            value: "¥3,280",
-            subtitle: "较上月 ↓12%",
-            showSubtitle: true,
-            color: .blue,
-            systemImage: "creditcard.fill"
-        )
-        .padding()
-        .previewLayout(.sizeThatFits)
-    }
-}
-#endif

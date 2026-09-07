@@ -1,16 +1,11 @@
 import Foundation
-import SwiftUI
 
-enum FlowType: String, Codable, CaseIterable, Identifiable {
+enum FlowType: String, Codable, CaseIterable, Identifiable, Sendable {
     case expense, income
-    var id: String { rawValue }
-    var title: String { self == .expense ? "支出" : "收入" }
-    var color: Color { self == .expense ? .red : .green }
-
-    var icon: String {
+    var title: String {
         switch self {
         case .expense:
-            return "$"
+            return "支出"
         case .income:
             return "收入"
         }
@@ -19,31 +14,36 @@ enum FlowType: String, Codable, CaseIterable, Identifiable {
 
 enum DisplayPalette {
     static let icons: [String] = [
-        "bag.fill", "tray.full", "bookmark.fill", "star.fill",
-        "fork.knife", "takeoutbag.and.cup.and.straw.fill", "cup.and.saucer.fill",
-        "birthdaycake.fill",
-        "popcorn.fill", "basket.fill", "bag.fill",
+        "folder", "tag.fill", "bookmark.fill", "star.fill",
+        "fork.knife", "takeoutbag.and.cup.and.straw.fill", "cup.and.saucer.fill", "birthday.cake.fill",
+        "popcorn.fill", "cart.fill", "basket.fill", "bag.fill",
         "car.fill", "tram.fill", "train.side.front.car", "airplane.circle.fill",
         "bicycle", "bus.fill", "ferry.fill", "fuelpump.fill",
         "house.fill", "house.and.flag.fill", "bed.double.fill", "lamp.floor.fill",
         "wrench.and.screwdriver.fill", "bolt.fill", "wifi", "fan.fill",
         "cross.case.fill", "stethoscope", "pills.fill", "bandage.fill",
-        "heart.fill", "figure.run", "soccerball", "basketball.inverse",
-        "gamecontroller.fill", "tv.fill", "music.note", "ticket.fill",
+        "heart.fill", "figure.run", "dumbbell.fill", "soccerball.inverse",
         "gift.fill", "party.popper.fill", "sparkles", "camera.fill",
         "leaf.fill", "fish.fill", "cat.fill", "dog.fill",
         "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill",
-        "text.fill"
+        "text.fill",
+        "book.fill", "books.vertical.fill", "graduationcap.fill", "doc.text.fill",
+        "desktopcomputer", "laptopcomputer", "iphone", "applewatch",
+        "banknote.fill", "creditcard.fill", "wallet.pass.fill", "building.columns.fill",
+        "briefcase.fill", "shippingbox.fill", "archivebox.fill", "paperplane.fill",
+        "person.2.fill", "figure.2.and.child.holdinghands", "pawprint.fill", "leaf.fill",
+        "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill"
     ]
 
     static let colors: [String] = [
-        "#5A4B8E", "#EA4080", "#28B576", "#3EA55E",
-        "#148A8A", "#2C205E", "#F55609", "#FF9731",
-        "#EA6388", "#EF4444", "#EC4899", "#8B5CF6"
+        "#EA6388", "#EF4444", "#EC4899", "#8B5CF6",
+        "#94A3B8", "#64748B", "#3B82F6", "#0EA5E9",
+        "#14B8A6", "#22C55E", "#F59E0B", "#F97316",
+        "#EAB308", "#EF4444", "#EC4899", "#8B5CF6"
     ]
 }
 
-enum Granularity: String, Codable, CaseIterable, Identifiable {
+enum Granularity: String, Codable, CaseIterable, Identifiable, Sendable {
     case day
     case week
     case month
@@ -59,6 +59,11 @@ enum Granularity: String, Codable, CaseIterable, Identifiable {
         case .year: return "年"
         }
     }
+}
+
+struct DateWindow: Sendable {
+    let start: Date
+    let end: Date
 }
 
 enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
@@ -82,10 +87,10 @@ enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
         let now = Date()
         switch self {
         case .currentWeek:
-            let interval = calendar.dateInterval(of: .weekOfYear, for: now)!
+            let interval = calendar.dateInterval(of: .weekOfYear, for: now) ?? DateInterval(start: now, duration: 7 * 24 * 3600)
             return DateWindow(start: interval.start, end: interval.end)
         case .currentMonth:
-            let interval = calendar.dateInterval(of: .month, for: now)!
+            let interval = calendar.dateInterval(of: .month, for: now) ?? DateInterval(start: now, duration: 30 * 24 * 3600)
             return DateWindow(start: interval.start, end: interval.end)
         case .currentQuarter:
             let month = calendar.component(.month, from: now)
@@ -94,10 +99,10 @@ enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
             components.month = quarterStartMonth
             components.day = 1
             let start = calendar.date(from: components) ?? now
-            let end = calendar.date(byAdding: .month, value: 3, to: start)
+            let end = calendar.date(byAdding: .month, value: 3, to: start) ?? now
             return DateWindow(start: start, end: end)
         case .currentYear:
-            let interval = calendar.dateInterval(of: .year, for: now)!
+            let interval = calendar.dateInterval(of: .year, for: now) ?? DateInterval(start: now, duration: 365 * 24 * 3600)
             return DateWindow(start: interval.start, end: interval.end)
         }
     }
@@ -113,18 +118,12 @@ struct CustomDateRange: Equatable, Sendable {
         return CustomDateRange(start: start, end: end)
     }
 
-    var resolved: DateWindow {
+    var resolvedWindow: DateWindow {
         DateWindow(
             start: Calendar.current.startOfDay(for: start),
-            end: Calendar.current.date(byAdding: .day, value: 1, to:
-                Calendar.current.startOfDay(for: end)) ?? end
+            end: Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: end)) ?? end
         )
     }
-}
-
-struct DateWindow: Sendable {
-    let start: Date
-    let end: Date
 }
 
 struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
@@ -137,6 +136,12 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
     let level: Int
     let children: [LedgerCategory]
 
+    enum CodingKeys: String, CodingKey {
+        case id, name, icon, color, level, children
+        case flowType = "flow_type"
+        case parentId = "parent_id"
+    }
+
     var displayName: String { name }
 
     var pathComponents: [String] {
@@ -146,6 +151,21 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
     var isLeaf: Bool { children.isEmpty }
 
     func flattened(prefix: [String] = []) -> [LedgerCategory] {
+        let currentPrefix = prefix + [name]
+        let current = LedgerCategory(
+            id: id,
+            name: currentPrefix.joined(separator: " / "),
+            flowType: flowType,
+            icon: icon,
+            color: color,
+            parentId: parentId,
+            level: level,
+            children: []
+        )
+        return [current] + children.flatMap { $0.flattened(prefix: currentPrefix) }
+    }
+
+    func leafFlattened(prefix: [String] = []) -> [LedgerCategory] {
         let currentPrefix = prefix + [name]
         if children.isEmpty {
             return [
@@ -161,7 +181,7 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
                 )
             ]
         }
-        return children.flatMap { $0.flattened(prefix: currentPrefix) }
+        return children.flatMap { $0.leafFlattened(prefix: currentPrefix) }
     }
 
     func selectableFlattened(prefix: [String] = []) -> [LedgerCategory] {
@@ -181,41 +201,30 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-enum CodingKeys: String, CodingKey {
-    case id, name, icon, color, note
-    case flowType = "flow_type"
-    case parentId = "parent_id"
-}
-
-struct LedgerTransaction: Identifiable, Codable, Hashable, Sendable {
+struct LedgerTransaction: Codable, Identifiable, Hashable, Sendable {
     let id: Int
     let title: String
     let amount: Double
+    let kind: FlowType
     let happenedAt: Date
     let note: String?
-    let kind: FlowType
     let merchant: String?
     let paymentMethod: String?
-    let source: String?
-    let currency: String?
+    let source: String
+    let currency: String
     let categoryId: Int?
     let categoryName: String?
     let bookId: Int?
     let bookName: String?
-    let bookIds: [Int]?
-    let bookNames: [String]?
-    let installmentIndex: Int?
+    let bookIds: [Int]
+    let bookNames: [String]
     let installmentGroupId: String?
+    let installmentIndex: Int?
     let installmentMonths: Int?
-    let installmentStartMonth: Date?
-    let installmentOriginalTotal: Double?
-    let originalAmount: Double?
-    let discountAmount: Double?
-    let premiumAmount: Double?
     let paidByParticipantId: String?
     let paidByParticipantName: String?
-    let splitParticipantIds: [String]?
-    let splitParticipantNames: [String]?
+    let splitParticipantIds: [String]
+    let splitParticipantNames: [String]
 
     enum CodingKeys: String, CodingKey {
         case id, title, amount, kind, note, merchant, source, currency
@@ -227,14 +236,9 @@ struct LedgerTransaction: Identifiable, Codable, Hashable, Sendable {
         case bookIds = "book_ids"
         case bookName = "book_name"
         case bookNames = "book_names"
-        case installmentIndex = "installment_index"
         case installmentGroupId = "installment_group_id"
+        case installmentIndex = "installment_index"
         case installmentMonths = "installment_months"
-        case installmentStartMonth = "installment_start_month"
-        case installmentOriginalTotal = "installment_original_total"
-        case originalAmount = "original_amount"
-        case discountAmount = "discount_amount"
-        case premiumAmount = "premium_amount"
         case paidByParticipantId = "paid_by_participant_id"
         case paidByParticipantName = "paid_by_participant_name"
         case splitParticipantIds = "split_participant_ids"
@@ -242,23 +246,13 @@ struct LedgerTransaction: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-struct LedgerTransaction: Identifiable, Codable, Hashable {
-    var id = UUID(); var title: String; var kind: FlowType; var amount: Double
-    var happenedAt: Date; var note: String?; var merchant: String?; var paymentMethod: String?
-    var source: String?; var currency: String?; var categoryId: Int?; var categoryName: String?
-    var bookId: Int?; var bookName: String?; var bookIds: [Int]?; var bookNames: [String]?
-    var installmentGroupId: UUID?; var installmentIndex: Int?; var installmentMonths: Int?
-    var installmentStartMonth: Date?; var installmentOriginalTotal: Double?
-    var originalAmount: Double?; var discountAmount: Double?; var premiumAmount: Double?
-    var paidByParticipantId: String?; var paidByParticipantName: String?
-    var splitParticipantIds: [String]?; var splitParticipantNames: [String]?
-}
-
 struct TrendPoint: Codable, Identifiable, Sendable {
     let label: String
     let income: Double
     let expense: Double
     let balance: Double
+
+    var id: String { label }
 }
 
 struct DistributionPoint: Codable, Identifiable, Sendable {
@@ -266,51 +260,37 @@ struct DistributionPoint: Codable, Identifiable, Sendable {
     let amount: Double
     let ratio: Double
     let color: String?
-    let id: String { category }
 }
 
 enum BudgetPeriod: String, Codable, CaseIterable, Identifiable {
     case monthly
-    var id: String { rawValue }
-    var title: String { self == .monthly ? "月度" : "" }
+    var id: String { category }
 }
 
 struct BudgetItem: Codable, Identifiable, Hashable {
-    let id: UUID
+    let id: Int
     let name: String
     let limitAmount: Double
     let period: BudgetPeriod
-    let categoryId: UUID?
+    let categoryId: Int?
+    let categoryName: String?
+    let year: Int
+    let month: Int
     let startDate: Date?
     let endDate: Date?
     let spentAmount: Double
     let usageRatio: Double
+
     enum CodingKeys: String, CodingKey {
         case id, name, limitAmount, period, categoryId, startDate, endDate, spentAmount, usageRatio
+        case periodType = "period_type"
+        case categoryName = "category_name"
+        case year, month
     }
 }
 
 struct BudgetReport: Identifiable, Codable, Hashable {
     let id: UUID
-    let name: String
-    let period: BudgetPeriod
-    let limitAmount: Double
-    let spentAmount: Double
-    let usageRatio: Double
-    let categoryName: String?
-    let month: Int?
-}
-
-enum CodingKeys: String, CodingKey {
-    case id, name, month, year
-    case limitAmount = "limit_amount"
-    case periodType = "period_type"
-    case startDate = "start_date"
-    case endDate = "end_date"
-    case categoryId = "category_id"
-    case categoryName = "category_name"
-    case spentAmount = "spent_amount"
-    case usageRatio = "usage_ratio"
 }
 
 struct OCRResult: Identifiable, Codable, Hashable {
@@ -324,10 +304,6 @@ struct OCRResult: Identifiable, Codable, Hashable {
     let happenedAt: Date?
     let currency: String?
     let categoryPath: [String]?
-    let details: [String]?
-    let originalAmount: Double?
-    let discountAmount: Double?
-    let realLines: [String]?
 }
 
 struct LedgerBook: Codable, Identifiable, Sendable {
@@ -335,59 +311,53 @@ struct LedgerBook: Codable, Identifiable, Sendable {
     let name: String
     let icon: String?
     let color: String?
+    let note: String?
     let startDate: Date?
     let endDate: Date?
-    let budgetLimit: Double?
+    let budgetLimitAmount: Double?
     let budgetStartDate: Date?
     let budgetEndDate: Date?
     let autoCollectEnabled: Bool
-    let autoCollectCategoryIds: [Int]?
-    let participants: [BookParticipant]?
-    let isSplit: Bool
-    var budgetEnabled: Bool { budgetLimit != nil }
-    var splitEnabled: Bool { participants?.count ?? 0 > 1 }
-    func participants() -> [BookParticipant] {
+    let expenseAmount: Double
+    let incomeAmount: Double
+    let balance: Double
+    let transactionCount: Int
+    let participantNames: [String]
+    let isPinned: Bool
+    let autoCollectCategoryIds: [Int]
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, icon, color, note, balance
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case autoCollectEnabled = "auto_collect_enabled"
+        case budgetLimitAmount = "budget_limit_amount"
+        case budgetStartDate = "budget_start_date"
+        case budgetEndDate = "budget_end_date"
+        case expenseAmount = "expense_amount"
+        case incomeAmount = "income_amount"
+        case transactionCount = "transaction_count"
+        case participantNames = "participant_names"
+        case isPinned = "is_pinned"
+        case autoCollectCategoryIds = "auto_collect_category_ids"
+    }
+
+    var splitEnabled: Bool { participantNames.count > 1 }
+    var budgetEnabled: Bool { (budgetLimitAmount ?? 0) > 0 }
+
+    var participants: [BookParticipant] {
         guard splitEnabled else { return [] }
         return participantNames.map { BookParticipant(id: $0, name: $0) }
     }
 }
 
-enum CodingKeys: String, CodingKey {
-    case id, name, icon, color, note, balance
-    case startDate = "start_date"
-    case endDate = "end_date"
-    case autoCollectEnabled = "auto_collect_enabled"
-    case budgetLimit = "budget_limit"
-    case budgetStartDate = "budget_start_date"
-    case budgetEndDate = "budget_end_date"
-    case expenseAmount = "expense_amount"
-    case incomeAmount = "income_amount"
-    case transactionCount = "transaction_count"
-    case participantNames = "participant_names"
-    case isSplit = "is_split"
-    case autoCollectCategoryIds = "auto_collect_category_ids"
-}
-
-var splitEnabled: Bool { participantNames.count > 1 }
-
-var participants: [BookParticipant] {
-    guard splitEnabled else { return [] }
-    return participantNames.map { BookParticipant(id: $0, name: $0) }
-}
-
-struct BookParticipant: Identifiable, Codable, Hashable, Sendable {
+struct BookParticipant: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
 }
 
 struct AppleAccountProfile: Codable {
-    var userIdentifier: String
-    var fullName: String?
-    var email: String?
-    var authorizedClientId: String?
-    var authorizationCode: String?
-    var identityToken: String?
-    init(id: UUID = UUID(), name: String) {
+    init(id: String = UUID().uuidString, name: String) {
         self.id = id
         self.name = name
     }
@@ -397,14 +367,13 @@ enum CloudSyncState: String { case disabled, idle, syncing, success, unavailable
     var title: String { self == .disabled ? "未启用" : self == .idle ? "等待同步" : self == .syncing ? "同步中" : self == .success ? "已同步" : self == .unavailable ? "iCloud 不可用" : self == .conflict ? "需要选择版本" : "失败" }
 }
 
-struct BookSplitSummary: Sendable {
+struct BookSplitSummary: Identifiable, Sendable {
     let participant: BookParticipant
     let paid: Double
     let owed: Double
     let net: Double
 
     var id: String { participant.id }
-    var net: Double { paid - owed }
 }
 
 enum AppearanceMode: String, Codable, CaseIterable, Identifiable {
@@ -433,6 +402,7 @@ struct PersistedLedgerSnapshot: Codable {
         case categories, books, transactions, budgets
         case startDate = "start_date"
         case endDate = "end_date"
+        case start, end, balance, distribution, trend
         case totalIncome = "total_income"
         case totalExpense = "total_expense"
     }
@@ -797,7 +767,7 @@ struct CategoryDraft: Encodable, Sendable {
     }
 
 extension Date {
-    var isoDateString: String {
+    var apiDateString: String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -808,7 +778,7 @@ extension Date {
 }
 
 extension Double {
-    var cnYuanText: String {
+    var cnYText: String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = "CNY"
@@ -817,7 +787,7 @@ extension Double {
     }
 }
 
-extension LedgerBook: Decodable {
+extension LedgerBook {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(Int.self, forKey: .id)
@@ -830,6 +800,7 @@ extension LedgerBook: Decodable {
         budgetLimitAmount = try container.decodeIfPresent(Double.self, forKey: .budgetLimitAmount)
         budgetStartDate = try container.decodeIfPresent(Date.self, forKey: .budgetStartDate)
         budgetEndDate = try container.decodeIfPresent(Date.self, forKey: .budgetEndDate)
+        autoCollectEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCollectEnabled) ?? false
         expenseAmount = try container.decodeIfPresent(Double.self, forKey: .expenseAmount)
         incomeAmount = try container.decodeIfPresent(Double.self, forKey: .incomeAmount)
         balance = try container.decodeIfPresent(Double.self, forKey: .balance)
@@ -850,10 +821,10 @@ extension LedgerTransaction {
         kind = try container.decode(FlowType.self, forKey: .kind)
         happenedAt = try container.decode(Date.self, forKey: .happenedAt)
         merchant = try container.decodeIfPresent(String.self, forKey: .merchant)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
+        note = try container.decodeIfPresent(String.self, forKey: .merchant)
         paymentMethod = try container.decodeIfPresent(String.self, forKey: .paymentMethod)
-        source = try container.decode(String.self, forKey: .source)
-        currency = try container.decode(String.self, forKey: .currency)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        currency = try container.decodeIfPresent(String.self, forKey: .currency)
         categoryId = try container.decodeIfPresent(Int.self, forKey: .categoryId)
         categoryName = try container.decodeIfPresent(String.self, forKey: .categoryName)
         bookId = try container.decodeIfPresent(Int.self, forKey: .bookId)
@@ -868,6 +839,7 @@ extension LedgerTransaction {
         premiumAmount = try container.decodeIfPresent(Double.self, forKey: .premiumAmount)
         paidByParticipantId = try container.decodeIfPresent(String.self, forKey: .paidByParticipantId)
         paidByParticipantName = try container.decodeIfPresent(String.self, forKey: .paidByParticipantName)
+        splitParticipantIds = try container.decodeIfPresent([String].self, forKey: .splitParticipantIds)
         splitParticipantIds = try container.decodeIfPresent([String].self, forKey: .splitParticipantIds)
         splitParticipantNames = try container.decodeIfPresent([String].self, forKey: .splitParticipantNames) ?? []
     }
