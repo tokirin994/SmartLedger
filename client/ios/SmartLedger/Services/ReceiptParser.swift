@@ -1,5 +1,6 @@
 import Foundation
 
+struct ReceiptParser {
     struct Rule {
         let keyword: String
         let tokens: [String]
@@ -88,7 +89,7 @@ import Foundation
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func isLikelyPage(_ lines: [String]) -> Bool {
+    private func isLikelyDetailPage(_ lines: [String]) -> Bool {
         let score = detailFieldLabels.reduce(0) { partial, field in
             partial + (lines.contains(where: { $0.contains(field) }) ? 1 : 0)
         }
@@ -102,7 +103,7 @@ import Foundation
 
     private func isAlipayDetailPage(_ lines: [String]) -> Bool {
         lines.contains(where: { $0.contains("账单详情") }) &&
-        lines.contains(where: { $0.contains("支付方式") || $0.contains("扣款说明") })
+        lines.contains(where: { $0.contains("付款方式") || $0.contains("扣款说明") })
     }
 
     private func isAlipayListPage(_ lines: [String]) -> Bool {
@@ -115,9 +116,9 @@ import Foundation
         let fieldMap = makeFieldMap(lines: lines)
         let title = lines.first(where: { $0.contains("付款") || $0.contains("转给") }) ?? "转账详情"
 
-        let amountLine = lines.first(where: { $0.range(of: #"^‑?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })!
+        let amountLine = lines.first(where: { $0.range(of: #"^‑?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
-        let happenedAt = extractDate(from: extractWeChatTransferFieldValue(label: "转账时间", lines: lines) ?? fieldMap["转账时间"] ?? text)!
+        let happenedAt = extractDate(from: extractWeChatTransferFieldValue(label: "转账时间", lines: lines) ?? fieldMap["转账时间"] ?? text)
         let paymentMethod = normalizePaymentMethod(extractWeChatTransferFieldValue(label: "支付方式", lines: lines) ?? fieldMap["支付方式"] ?? fieldMap["付款方式"] ?? "零钱")
         let merchant = normalizeListMerchant(title) ?? title
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)
@@ -149,10 +150,10 @@ import Foundation
 
     private func parseAlipayDetail(lines: [String]) -> OCRImportResult {
         let text = lines.joined(separator: "\n")
-        let amountLine = lines.first(where: { $0.range(of: #"^‑?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })!
+        let amountLine = lines.first(where: { $0.range(of: #"^‑?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
-        let happenedAt = extractDate(from: lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) }!)
-        let paymentMethod = normalizePaymentMethod(extractAlipayDetailPaymentMethod(from: lines)!)
+        let happenedAt = extractDate(from: lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) })
+        let paymentMethod = normalizePaymentMethod(extractAlipayDetailPaymentMethod(from: lines))
         let merchant = extractAlipayDetailMerchant(from: lines)
         let title = extractAlipayDetailTitle(from: lines) ?? merchant
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)

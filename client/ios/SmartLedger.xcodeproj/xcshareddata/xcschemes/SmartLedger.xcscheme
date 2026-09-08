@@ -40,10 +40,11 @@
       </MacroExpansion>
       <Testables>
          <TestableReference
-            skipped = "NO">
+            skipped = "NO"
+            parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E9A430F7859013BD68A8E4A5"
+               BlueprintIdentifier = "E9B430F7859013BD6BA8E4A5"
                BuildableName = "SmartLedgerTests.xctest"
                BlueprintName = "SmartLedgerTests"
                ReferencedContainer = "container:SmartLedger.xcodeproj">
@@ -53,17 +54,17 @@
       <CommandLineArguments>
       </CommandLineArguments>
    </TestAction>
-   <LaunchAction>
+   <LaunchAction
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       launchStyle = "0"
       useCustomWorkingDirectory = "NO"
       ignoresPersistentStateOnLaunch = "NO"
-      allowLocationSimulation = "YES"
-      debugServiceExtension = "internal"
       debugDocumentVersioning = "YES"
-      <BuildableProductRunnable>
+      debugServiceExtension = "internal"
+      allowLocationSimulation = "YES">
+      <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
@@ -76,13 +77,13 @@
       <CommandLineArguments>
       </CommandLineArguments>
    </LaunchAction>
-   <ProfileAction>
+   <ProfileAction
       buildConfiguration = "Release"
       shouldUseLaunchSchemeArgsEnv = "YES"
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
-      debugDocumentVersioning = "YES"
-      <BuildableProductRunnable>
+      debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
@@ -95,10 +96,10 @@
       <CommandLineArguments>
       </CommandLineArguments>
    </ProfileAction>
-   <AnalyzeAction>
+   <AnalyzeAction
       buildConfiguration = "Debug">
    </AnalyzeAction>
-   <ArchiveAction>
+   <ArchiveAction
       buildConfiguration = "Release"
       revealArchiveInOrganizer = "YES">
    </ArchiveAction>

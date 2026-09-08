@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import UIKit
 
-/// 全局设置统一由 LedgerStore 持有；本类型提供持久化 key，避免散落的字符串常量。
 struct DashboardPinnedRange: Codable, Equatable, Identifiable {
     let id: UUID
     var title: String
@@ -66,7 +65,7 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(iCloudPreferred, forKey: Self.iCloudPreferredKey) }
     }
 
-    @Published private(set) var paymentChannels: [String] {
+    @Published var paymentChannels: [String] {
         didSet { UserDefaults.standard.set(paymentChannels, forKey: Self.paymentChannelsKey) }
     }
 
@@ -123,7 +122,7 @@ final class AppSettings: ObservableObject {
     init() {
         self.iCloudPreferred = UserDefaults.standard.object(forKey: Self.iCloudPreferredKey) as? Bool ?? true
         self.bookAssignmentPromptEnabled = UserDefaults.standard.object(forKey: Self.bookAssignmentPromptEnabledKey) as? Bool ?? true
-        self.appearanceMode = AppAppearanceMode(rawValue: UserDefaults.standard.string(forKey: Self.appearanceModeKey) ?? "system")
+        self.appearanceMode = AppAppearanceMode(rawValue: UserDefaults.standard.string(forKey: Self.appearanceModeKey) ?? "system") ?? .system
 
         let storedChannels = UserDefaults.standard.stringArray(forKey: Self.paymentChannelsKey) ?? []
         let merged = storedChannels.isEmpty ? Self.defaultPaymentChannels : storedChannels
@@ -272,11 +271,12 @@ final class AppSettings: ObservableObject {
         return decoded
     }
 
-private static func defaultPinnedTitle(for range: CustomDateRange) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "zh_CN")
-    formatter.dateFormat = "yyyy-MM-dd"
-    return "\(formatter.string(from: range.start)) ~ \(formatter.string(from: range.end))"
+    private static func defaultPinnedTitle(for range: CustomDateRange) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "\(formatter.string(from: range.start)) ~ \(formatter.string(from: range.end))"
+    }
 }
 
 struct AppBackdrop: View {

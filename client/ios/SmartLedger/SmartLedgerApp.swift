@@ -120,12 +120,8 @@ private struct MoreHubView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .appBackground()
+            .appBackdrop()
             .navigationTitle("更多")
-            .onReceive(NotificationCenter.default.publisher(for: .smartLedgerResetTabRoot)) { note in
-                guard let tab = note.object as? RootTab, tab == .more else { return }
-                navPath = NavigationPath()
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .smartLedgerResetTabRoot)) { note in
             guard let tab = note.object as? RootTab, tab == .more else { return }

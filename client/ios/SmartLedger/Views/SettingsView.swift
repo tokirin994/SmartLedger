@@ -104,9 +104,9 @@ struct SettingsView: View {
                         HStack(spacing: 10) {
                             ProgressView()
                             Text(store.syncState == .checking ? "正在检查 iCloud 账号状态…" : "正在进行 iCloud 同步…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     }
 
                     Button("刷新 iCloud 状态") {
@@ -240,12 +240,6 @@ private func loadBackgroundImage(from item: PhotosPickerItem) async {
     }
 }
 
-struct PaymentMethodsView: View {
-    @EnvironmentObject private var store: LedgerStore; @State private var value = ""
-    var body: some View { List { ForEach(store.paymentMethods, id: \.self) { Text($0) }.onDelete {
-store.paymentMethods.remove(atOffsets: $0); store.save() }; HStack { TextField("新增支付渠道", text: $value);
-Button("添加") { guard !value.isEmpty else { return }; store.paymentMethods.append(value); store.save() } } }
-}.navigationTitle("支付渠道") }
 private struct PaymentChannelSuggestionPickerSheet: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss

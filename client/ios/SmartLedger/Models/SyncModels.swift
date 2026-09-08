@@ -18,26 +18,8 @@ enum CloudAccountStatus: String, Codable, Sendable {
         case .couldNotDetermine: return "无法判断"
         }
     }
-
-    var description: String {
-        switch self {
-        case .unknown:
-            return "未知"
-        case .available:
-            return "可用"
-        case .restricted:
-            return "账号受限，无法使用 iCloud 同步"
-        case .noAccount:
-            return "未登录 iCloud"
-        case .temporarilyUnavailable:
-            return "检查中"
-        case .couldNotDetermine:
-            return "无法判断"
-        }
-    }
 }
 
-//// MARK: - SyncState
 enum SyncState: String, Codable, Sendable {
     case idle
     case checking
@@ -56,18 +38,8 @@ enum SyncState: String, Codable, Sendable {
         case .failed: return "最近失败"
         }
     }
-
-    var isActive: Bool {
-        switch self {
-        case .checking, .syncing:
-            return true
-        default:
-            return false
-        }
-    }
 }
 
-//// MARK: - SyncConflictSummary
 struct SyncConflictSummary: Codable, Sendable {
     let localUpdatedAt: Date
     let remoteUpdatedAt: Date
@@ -77,35 +49,13 @@ struct SyncConflictSummary: Codable, Sendable {
     let remoteBookCount: Int
 }
 
-//// MARK: - AppleAccountProfile
 struct AppleAccountProfile: Codable, Sendable {
-    let identityToken: String?
-    let authorizationCode: String?
     let userIdentifier: String
     let fullName: String?
     let email: String?
-    let isRealUser: Bool
-    let fetchedAt: Date
-
-    init(identityToken: String? = nil,
-         authorizationCode: String? = nil,
-         userIdentifier: String,
-         fullName: String? = nil,
-         email: String? = nil,
-         isRealUser: Bool = false,
-         fetchedAt: Date = Date()) {
-        self.identityToken = identityToken
-        self.authorizationCode = authorizationCode
-        self.userIdentifier = userIdentifier
-        self.fullName = fullName
-        self.email = email
-        self.isRealUser = isRealUser
-        self.fetchedAt = fetchedAt
-    }
-    let authorized: Date
+    let authorizedAt: Date
 }
 
-//// MARK: - PersistedLedgerSnapshot
 struct PersistedLedgerSnapshot: Codable, Sendable {
     var categories: [LedgerCategory]
     var books: [LedgerBook]
@@ -117,4 +67,3 @@ struct PersistedLedgerSnapshot: Codable, Sendable {
     var nextBudgetId: Int
     var updatedAt: Date
 }
-

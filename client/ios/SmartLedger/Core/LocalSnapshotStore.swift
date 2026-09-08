@@ -1,9 +1,8 @@
 import Foundation
 
+actor LocalSnapshotStore {
+  private let url: URL
 
-struct LocalSnapshotStore: LedgerSnapshotStore {
-  let key: String
-  init(key: String = "smartLedger.snapshot.v1") { self.key = key }
   init(filename: String = "ledger-snapshot.json") {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
