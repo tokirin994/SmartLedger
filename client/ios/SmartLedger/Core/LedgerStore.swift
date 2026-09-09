@@ -5,101 +5,11 @@ final class LedgerStore: ObservableObject {
     @Published var categories: [LedgerCategory] = []
     @Published var books: [LedgerBook] = []
     @Published var transactions: [LedgerTransaction] = []
-    @Published var budgets: [Budget] = []
-    @Published var appearance: AppearanceMode = .system
-    @Published var recommendBooks = true
-    @Published var paymentMethods = ["微信支付", "支付宝", "银行卡", "现金"]
-    @Published var backgroundImageData: Data?
-    @Published var appleProfile: AppleAccountProfile?
-    @Published var cloudSyncEnabled = false
-    @Published var cloudState: CloudSyncState = .disabled
-    @Published var cloudMessage = "本地数据优先"
-    @Published var cloudConflict: PersistedLedgerSnapshot?
-
-    init() { load(); loadPreferences() }
-    var preferredColorScheme: ColorScheme? { appearance == .system ? nil : (appearance == .dark ? .dark : .light) }
-    var snapshot: PersistedLedgerSnapshot {
-        PersistedLedgerSnapshot(
-            categories: categories,
-            books: books,
-            transactions: transactions,
-            budgets: budgets,
-            updatedAt: Date()
-        )
-    }
-
-    func save() { try? snapshotStore.save(snapshot); savePreferences() }
-    func apply(_ value: PersistedLedgerSnapshot) {
-        categories = value.categories
-        books = value.books
-        transactions = value.transactions
-        budgets = value.budgets
-        save()
-    }
-
-    func load() {
-        guard let value = try? snapshotStore.load(), let value else { seed(); return }
-        categories = value.categories
-        books = value.books
-        transactions = value.transactions
-        budgets = value.budgets
-    }
-
-    func add_transaction(_ transaction: LedgerTransaction) {
-        transactions.append(transaction)
-        save()
-    }
-
-    func update_transaction(_ transaction: LedgerTransaction) {
-        guard let index = transactions.firstIndex(where: { $0.id == transaction.id }) else { return }
-        transactions[index] = transaction
-        save()
-    }
-
-    func delete_transaction(_ transaction: LedgerTransaction) {
-        transactions.removeAll { $0.id == transaction.id }
-        save()
-    }
-
-    func category_for(_ uuid: UUID?) -> LedgerCategory? {
-        categories.first { $0.id == uuid }
-    }
-
-    func booksForCategory(_ category: LedgerCategory) -> [LedgerBook] {
-        books.filter { $0.categories.filter { $0.id == category.id || $0.parentID == category.id }.map(\.id) }
-    }
-
-    func autoBookIds(for transactions: [LedgerTransaction]) -> [UUID] {
-        books.filter { $0.autoCollectEnabled &&
-            transaction.happenedAt >= $0.startDate && transaction.happenedAt <= $0.endDate &&
-            $0.autoCollectCategoryIDs.contains(transaction.categoryID ?? UUID()) }.map(\.id)
-    }
-
-    func expense(in interval: DateInterval, categoryID: UUID? = nil) -> Double {
-        transactions.filter { $0.kind == .expense && interval.contains($0.happenedAt) && (categoryID == nil || categoryID == $0.categoryID) }.reduce(0) { $0 + $1.amount }
-    }
-
-    func seed() {
-        let food = LedgerCategory(name: "餐饮", kind: .expense, icon: "fork.knife", colorHex: "F59E0B", parentID: nil);
-        let coffee = LedgerCategory(name: "奶茶咖啡", kind: .expense, icon: "cup.and.saucer.fill", colorHex: "F59E0B", parentID: food.id);
-        let transport = LedgerCategory(name: "交通", kind: .expense, icon: "car.fill", colorHex: "3882F6", parentID: nil);
-        let shopping = LedgerCategory(name: "购物", kind: .expense, icon: "bag.fill", colorHex: "EC4899", parentID: nil);
-        let salary = LedgerCategory(name: "工资", kind: .income, icon: "banknote.fill", colorHex: "22CC5E", parentID: nil);
-        categories = [food, coffee, transport, shopping, salary]
-
-        let trip = LedgerBook(name: "三亚旅行", icon: "airplane", colorHex: "0EAE59", startDate: Date().addingTimeInterval(-86400*30), endDate: Date().addingTimeInterval(-86400*3), autoCollectEnabled: true, autoCollectCategoryIDs: [food.id, transport.id], budgetLimit: 5000, participants: ["我", "小林"], isPinned: true)
-        books = [trip]; budgets = [Budget(name: "本月餐饮", limitAmount: 1500, categoryId: food.id)]
-        transactions = [LedgerTransaction(title: "瑞幸咖啡", amount: 18, kind: .expense, happenedAt: Date(), paymentMethod: "微信支付", source: "ocr", categoryID: coffee.id, bookIDs: [trip.id]), LedgerTransaction(title: "滴滴出行", amount: 35.5, kind: .expense, happenedAt: Date().addingTimeInterval(-86400), paymentMethod: "支付宝", categoryID: transport.id, bookIDs: [trip.id]), LedgerTransaction(title: "八月工资", amount: 19000, kind: .income, happenedAt: Date(), paymentMethod: "银行卡", categoryID: salary.id)]
-        save()
-    }
-
-    @Published var categories: [LedgerCategory] = []
-    @Published var books: [LedgerBook] = []
-    @Published var transactions: [LedgerTransaction] = []
     @Published var overview: AnalyticsOverview?
     @Published var budgets: [BudgetItem] = []
     @Published var parsedImport: OCRImportResult?
     @Published var parsedImportItems: [OCRImportResult] = []
+    @Published var categoryTrend: CategoryTrendResponse?
     @Published var activeRangePreset: DateRangePreset = .currentMonth
     @Published var activeCustomRange: CustomDateRange = .recent30Days
     @Published var activeGranularity: Granularity = .week
@@ -109,7 +19,31 @@ final class LedgerStore: ObservableObject {
     @Published var cloudSyncEnabled: Bool = UserDefaults.standard.object(forKey: "smartledgerlocal.cloudSyncEnabled") as? Bool ?? false {
         didSet { UserDefaults.standard.set(cloudSyncEnabled, forKey: "smartledgerlocal.cloudSyncEnabled") }
     }
-    /// 对应补丁定义的启动引导：本地数据优先，启用同步后再刷新云状态。
+
+    @Published var cloudAccountStatus: CloudAccountStatus = .unknown
+    @Published var cloudUserRecordName: String?
+    @Published var lastSyncAt: Date?
+    @Published var lastSyncMessage: String = "尚未同步"
+    @Published var syncState: SyncState = .idle
+    @Published var appleProfile: AppleAccountProfile?
+    @Published var recommendedBookForDraft: LedgerBook?
+    @Published var pendingSyncConflict: SyncConflictSummary?
+
+    private let calendar = Calendar.current
+    private let parser = ReceiptParser()
+    private let legacyLocalStore = LocalSnapshotStore()
+    private let localStore = SwiftDataSnapshotStore()
+    private let cloudStore = CloudSyncService()
+
+    private var localUpdatedAt: Date?
+    private var hasBootstrapped = false
+    private var pendingRemoteSnapshot: PersistedLedgerSnapshot?
+
+    private var nextTransactionId = 1000
+    private var nextBookId = 100
+    private var nextCategoryId = 1000
+    private var nextBudgetId = 100
+
     func bootstrap() async {
         guard !hasBootstrapped else { return }
         hasBootstrapped = true
@@ -156,7 +90,7 @@ final class LedgerStore: ObservableObject {
         await refreshDashboard(range: activeRangePreset, granularity: activeGranularity)
     }
 
-    func bootstrapNeeded() async {
+    func bootstrapIfNeeded() async {
         await bootstrap()
     }
 
@@ -173,7 +107,7 @@ final class LedgerStore: ObservableObject {
     }
 
     private func refreshDashboard(window: DateWindow, granularity: Granularity) async {
-        let filtered = allTransactions.compute(in: window)
+        let filtered = allTransactions(in: window)
         budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets)
         overview = LocalAnalytics.makeOverview(
             transactions: filtered,
@@ -194,6 +128,7 @@ final class LedgerStore: ObservableObject {
     }
 
     func loadCategories() async {}
+    func loadTransactions() async {}
     func loadBooks() async {}
     func loadTransactions(bookId: Int?) async {}
 
@@ -263,7 +198,7 @@ final class LedgerStore: ObservableObject {
                     bookName: bookName,
                     bookIds: resolvedBooks.map(\.id),
                     bookNames: resolvedBooks.map(\.name),
-                    installmentGroupId: months > 1 ? groupId : nil,
+                    installmentGroupId: groupId,
                     installmentIndex: months > 1 ? index + 1 : nil,
                     installmentMonths: months > 1 ? months : nil,
                     installmentOriginalTotal: months > 1 ? amount : nil,
@@ -300,7 +235,7 @@ final class LedgerStore: ObservableObject {
         let resolvedBooks = resolveBooksForTransactionDraft(draft)
         let resolvedBook = resolvedBooks.first
         let selectedBook = resolvedBook
-        let bookName = resolvedCategoryName(for: draft.categoryId)
+        let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
         let resolvedSplitParticipants = bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
         let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
@@ -1025,7 +960,7 @@ ts: budgets)
     }
 
     private func rebuildTransaction(_ tx: LedgerTransaction, bookId: Int?, bookName: String?, bookIds: [Int], bookNames:
-ng]) -> LedgerTransaction {
+[String]) -> LedgerTransaction {
         LedgerTransaction(
             id: tx.id,
             title: tx.title,

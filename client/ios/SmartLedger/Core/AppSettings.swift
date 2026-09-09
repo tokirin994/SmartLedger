@@ -65,7 +65,7 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(iCloudPreferred, forKey: Self.iCloudPreferredKey) }
     }
 
-    @Published var paymentChannels: [String] {
+    @Published private(set) var paymentChannels: [String] {
         didSet { UserDefaults.standard.set(paymentChannels, forKey: Self.paymentChannelsKey) }
     }
 
@@ -73,7 +73,7 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(bookAssignmentPromptEnabled, forKey: Self.bookAssignmentPromptEnabledKey) }
     }
 
-    @Published private(set) var appearanceMode: AppAppearanceMode {
+    @Published var appearanceMode: AppAppearanceMode {
         didSet { UserDefaults.standard.set(appearanceMode.rawValue, forKey: Self.appearanceModeKey) }
     }
 
