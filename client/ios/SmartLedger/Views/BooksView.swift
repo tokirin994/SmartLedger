@@ -3,41 +3,66 @@ import SwiftUI
 struct BooksView: View {
     @EnvironmentObject private var store: LedgerStore
     @State private var showingCreate = false
-    @State private var selectedBook: LedgerBook?
+    @State private var searchText = ""
+    @State private var bookToDelete: LedgerBook?
+
+    private var filteredBooks: [LedgerBook] {
+        store.books.filter { book in
+            searchText.isEmpty || book.name.localizedCaseInsensitiveContains(searchText) || (book.note ?? "").localizedCaseInsensitiveContains(searchText)
+        }.sorted {
+            if $0.isPinned != $1.isPinned { return $0.isPinned && !$1.isPinned }
+            if $0.startDate != $1.startDate { return ($0.startDate ?? .distantPast) > ($1.startDate ?? .distantPast) }
+            return $0.id > $1.id
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if store.books.isEmpty {
-                    ContentUnavailableView("暂无账本", systemImage: "books.vertical", description: Text("点击右上角新建账本"))
+            List {
+                Section {
+                    HStack(spacing: 10) {
+                        bookMetric("账本数", "\(store.books.count)", .blue)
+                        bookMetric("主题支出", store.books.reduce(0) { $0 + $1.expenseAmount }.cnyText, .orange)
+                        bookMetric("主题收入", store.books.reduce(0) { $0 + $1.incomeAmount }.cnyText, .green)
+                    }.listRowBackground(Color.clear)
+                }
+                Section {
+                    HStack { Image(systemName: "magnifyingglass").foregroundStyle(.secondary); TextField("搜索账本标题", text: $searchText); if !searchText.isEmpty { Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill") } } }
+                }
+                if filteredBooks.isEmpty {
+                    Section { ContentUnavailableView(searchText.isEmpty ? "暂无主题账本" : "没有匹配的账本", systemImage: "books.vertical") }
                 } else {
-                    List {
-                        ForEach(store.books, id: \.id) { book in
-                            Button { selectedBook = book } label: { BookRow(book: book) }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button { Task { await store.setBookPinned(book.id, pinned: !book.isPinned) } } label: {
-                                        Label(book.isPinned ? "取消置顶" : "置顶", systemImage: book.isPinned ? "pin.slash" : "pin")
-                                    }.tint(.orange)
-                                }
-                                .swipeActions {
-                                    Button(role: .destructive) { Task { await store.deleteBook(book.id) } } label: {
-                                        Label("删除", systemImage: "trash")
-                                    }
+                    Section {
+                        ForEach(filteredBooks) { book in
+                            NavigationLink { BookDetailView(book: book) } label: { BookRow(book: book) }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button { Task { await store.setBookPinned(book.id, pinned: !book.isPinned) } } label: { Label(book.isPinned ? "取消置顶" : "置顶", systemImage: book.isPinned ? "pin.slash" : "pin") }.tint(.orange)
+                                    Button(role: .destructive) { bookToDelete = book } label: { Label("删除", systemImage: "trash") }
                                 }
                         }
                     }
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("账本")
-            .toolbar { Button { showingCreate = true } label: { Image(systemName: "plus") } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button { Task { await store.loadBooks() } } label: { Image(systemName: "arrow.clockwise") } }
+                ToolbarItem(placement: .topBarTrailing) { Button { showingCreate = true } label: { Image(systemName: "plus") } }
+            }
             .sheet(isPresented: $showingCreate) { BookEditorView(book: nil).environmentObject(store) }
-            .sheet(item: $selectedBook) { book in BookDetailView(book: book).environmentObject(store) }
+            .alert("删除账本？", isPresented: Binding(get: { bookToDelete != nil }, set: { if !$0 { bookToDelete = nil } })) {
+                Button("取消", role: .cancel) {}
+                Button("删除", role: .destructive) { if let bookToDelete { Task { await store.deleteBook(bookToDelete.id) }; self.bookToDelete = nil } }
+            } message: { Text("删除账本不会删除流水，只会移除流水与该账本的关联。") }
             .task { await store.loadBooks() }
         }
     }
-}
 
+    private func bookMetric(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.subheadline.weight(.bold)).foregroundStyle(color) }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(10).glassCard(cornerRadius: 14, strokeOpacity: 0.16)
+    }
+}
 private struct BookRow: View {
     let book: LedgerBook
     var body: some View {
@@ -61,8 +86,12 @@ private struct BookDetailView: View {
     @Environment(\.dismiss) private var dismiss
     let book: LedgerBook
     @State private var showingEditor = false
+    @State private var deleteRequested = false
 
+    private var relatedTransactions: [LedgerTransaction] { store.transactions.filter { $0.bookIds.contains(book.id) || $0.bookId == book.id }.sorted { $0.happenedAt > $1.happenedAt } }
     private var current: LedgerBook { store.books.first(where: { $0.id == book.id }) ?? book }
+    private func transactionAmountText(_ transaction: LedgerTransaction) -> String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
+    private func transactionAmountColor(_ transaction: LedgerTransaction) -> Color { transaction.kind == .expense ? .primary : .green }
     var body: some View {
         NavigationStack {
             List {
@@ -79,13 +108,30 @@ private struct BookDetailView: View {
                     LabeledContent("成员", value: current.participantNames.isEmpty ? "仅自己" : current.participantNames.joined(separator: "、"))
                 }
                 if let start = current.startDate { Section("账本期间") { LabeledContent("开始", value: start.formatted(date: .abbreviated, time: .omitted)); if let end = current.endDate { LabeledContent("结束", value: end.formatted(date: .abbreviated, time: .omitted)) } } }
+                Section("归集流水") {
+                    if relatedTransactions.isEmpty { Text("暂无归集流水").foregroundStyle(.secondary) }
+                    ForEach(relatedTransactions) { tx in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(tx.title)
+                                Text(tx.happenedAt.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(transactionAmountText(tx)).foregroundStyle(transactionAmountColor(tx))
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("剔除", systemImage: "minus.circle") }
+                        }
+                    }
+                }
             }
             .navigationTitle(current.name)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("编辑") { showingEditor = true } }
+                ToolbarItem(placement: .confirmationAction) { Menu { Button("设置") { showingEditor = true }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "ellipsis.circle") } }
             }
             .sheet(isPresented: $showingEditor) { BookEditorView(book: current).environmentObject(store) }
+            .alert("删除账本？", isPresented: $deleteRequested) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { Task { await store.deleteBook(current.id) }; dismiss() } } message: { Text("删除账本不会删除流水，只会移除关联。") }
         }
     }
 }
@@ -108,6 +154,8 @@ private struct BookEditorView: View {
     @State private var endDate: Date
     @State private var members: [String]
     @State private var newMember = ""
+    @State private var showAutoCollectSetup = false
+    @State private var collectExistingNow = false
 
     init(book: LedgerBook?) {
         self.book = book
@@ -145,11 +193,13 @@ private struct BookEditorView: View {
                     if budgetEnabled { TextField("预算金额", text: $budgetText).keyboardType(.decimalPad) }
                 }
                 Section("自动归集") {
-                    Toggle("按分类自动归集流水", isOn: $autoCollectEnabled)
+                    Toggle("自动归集范围内流水", isOn: Binding(get: { autoCollectEnabled }, set: { enabled in
+                        if enabled && !autoCollectEnabled { showAutoCollectSetup = true } else { autoCollectEnabled = enabled }
+                    }))
                     if autoCollectEnabled {
-                        Text("未选择分类时，将匹配全部分类。") .font(.caption).foregroundStyle(.secondary)
-                        ForEach(store.categories.flatMap { $0.leafFlattened() }, id: \.id) { category in
-                            Toggle(category.displayName, isOn: Binding(get: { selectedCategoryIDs.contains(category.id) }, set: { enabled in if enabled { selectedCategoryIDs.insert(category.id) } else { selectedCategoryIDs.remove(category.id) } }))
+                        Text("仅匹配账本时间范围内的支出流水；未选分类表示全部分类。") .font(.caption).foregroundStyle(.secondary)
+                        NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: {
+                            LabeledContent("自动归集分类", value: selectedCategoryIDs.isEmpty ? "全部分类" : "已选 \(selectedCategoryIDs.count) 项")
                         }
                     }
                 }
@@ -162,13 +212,21 @@ private struct BookEditorView: View {
             .navigationTitle(book == nil ? "新建账本" : "编辑账本")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } }
             .task { if store.categories.isEmpty { await store.loadCategories() } }
+            .sheet(isPresented: $showAutoCollectSetup) {
+                NavigationStack { VStack(alignment: .leading, spacing: 18) { Text("开启自动归集").font(.title3.bold()); Text("保存后，新流水会按账本日期范围和分类规则归集。你也可以选择立即归集已有流水。").foregroundStyle(.secondary); Toggle("保存后主动归集一次已有流水", isOn: $collectExistingNow); Spacer(); HStack { Button("取消") { showAutoCollectSetup = false }; Spacer(); Button("开启") { autoCollectEnabled = true; showAutoCollectSetup = false }.buttonStyle(.borderedProminent) } }.padding().navigationTitle("开启自动归集").navigationBarTitleDisplayMode(.inline) }
+            }
         }
     }
 
     private func save() async {
         let amount = budgetEnabled ? Double(budgetText) : nil
         let draft = BookDraft(name: name.trimmingCharacters(in: .whitespacesAndNewlines), icon: icon.isEmpty ? nil : icon, note: note.isEmpty ? nil : note, color: color.isEmpty ? nil : color, startDate: hasDateRange ? startDate : nil, endDate: hasDateRange ? endDate : nil, budgetLimitAmount: amount, budgetStartDate: hasDateRange ? startDate : nil, budgetEndDate: hasDateRange ? endDate : nil, autoCollectEnabled: autoCollectEnabled, participantNames: members, isPinned: isPinned, autoCollectCategoryIds: Array(selectedCategoryIDs).sorted())
-        if let book { await store.updateBook(book.id, with: draft) } else { _ = await store.createBook(draft) }
+        if let book { await store.updateBook(book.id, with: draft); if collectExistingNow { await store.collectTransactionsIntoBook(book.id) } } else { let id = await store.createBook(draft); if collectExistingNow { await store.collectTransactionsIntoBook(id) } }
         dismiss()
     }
+}
+private struct BookAutoCollectCategoryPicker: View {
+    @EnvironmentObject private var store: LedgerStore
+    @Binding var selectedIDs: Set<Int>
+    var body: some View { List { Section { Button("全部分类") { selectedIDs.removeAll() }.foregroundStyle(selectedIDs.isEmpty ? .blue : .primary) }; Section("支出分类") { ForEach(store.selectableCategories(for: .expense)) { category in Button { if selectedIDs.contains(category.id) { selectedIDs.remove(category.id) } else { selectedIDs.insert(category.id) } } label: { HStack { Text(category.displayName); Spacer(); if selectedIDs.contains(category.id) { Image(systemName: "checkmark").foregroundStyle(.blue) } } } } } }.navigationTitle("自动归集分类") }
 }
