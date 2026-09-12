@@ -122,7 +122,7 @@ enum LocalAnalytics {
   }
 
   private static func makeChildDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], rootCategoryId: Int) -> [DistributionPoint] {
-    guard let rootCategory = categories.first(where: { $0.id == rootCategoryId && $0.level == 1 }) else { return [] }
+    guard let rootCategory = categories.first(where: { $0.id == rootCategoryId && $0.parentId == nil }) else { return [] }
     let hasChildren = categories.contains { $0.parentId == rootCategoryId }
 
     var bucket: [String: (amount: Double, color: String?)] = [:]
@@ -206,7 +206,7 @@ enum LocalAnalytics {
     guard let current = all.first(where: { $0.id == categoryId }) else { return nil }
     let path = current.name.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
     guard let rootName = path.first else { return current }
-    return all.first(where: { $0.level == 1 && $0.name == rootName }) ?? current
+    return all.first(where: { $0.parentId == nil && $0.name == rootName }) ?? current
   }
 
   private static func granularityLabel(for date: Date, granularity: Granularity) -> String {

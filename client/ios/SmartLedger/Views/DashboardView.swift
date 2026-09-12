@@ -185,47 +185,73 @@ private var summaryGrid: some View {
             if let trend = store.overview?.trend, !trend.isEmpty {
                 CompactLegendView(items: trendLegendItems)
 
+                HStack {
+                    Text("左轴 · 支出")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Text("右轴 · 收入 / 结余")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+
                 FixedYAxisScrollableChart(
                     itemCount: trend.count,
                     minimumSlotWidth: 58,
                     height: 260,
-                    yDomain: trendYDomain,
-                    yTicks: trendYTicks,
+                    yDomain: -0.08...1.08,
+                    yTicks: trendAxisRatios.map { YAxisTickItem(value: $0, label: "") },
                     axisStyle: .compact
                 ) {
                     Chart {
-                        ForEach(trendYTicks) { tick in
-                            RuleMark(y: .value("刻度", tick.value))
-                                .foregroundStyle(Color.secondary.opacity(0.16))
-                                .lineStyle(StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
-                        }
-
                         ForEach(trend) { item in
                             BarMark(
                                 x: .value("时间", item.label),
-                                y: .value("支出", item.expense)
+                                y: .value("支出", normalized(item.expense, in: expenseTrendDomain))
                             )
                             .foregroundStyle(Color.orange.gradient)
 
                             LineMark(
                                 x: .value("时间", item.label),
-                                y: .value("收入", item.income)
+                                y: .value("收入", normalized(item.income, in: incomeTrendDomain))
                             )
                             .foregroundStyle(Color.green)
                             .symbol(Circle())
 
                             LineMark(
                                 x: .value("时间", item.label),
-                                y: .value("结余", item.balance)
+                                y: .value("结余", normalized(item.balance, in: incomeTrendDomain))
                             )
                             .foregroundStyle(Color.blue)
                             .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
                         }
                     }
                     .chartLegend(.hidden)
-                    .chartYScale(domain: trendYDomain)
-                    .chartYAxis { nativeYAxisMarks(values: trendYTicks.map(\.value)) }
-                    .chartPlotStyle { plot in plot.padding(.top, 16) }
+                    .chartYScale(domain: -0.08...1.08)
+                    .chartYAxis {
+                        AxisMarks(position: .leading, values: trendAxisRatios) { value in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                                .foregroundStyle(Color.orange.opacity(0.15))
+                            AxisTick().foregroundStyle(Color.orange.opacity(0.65))
+                            AxisValueLabel {
+                                if let ratio = value.as(Double.self) {
+                                    Text(interpolatedValue(in: expenseTrendDomain, ratio: ratio).cnyAxisText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
+                        AxisMarks(position: .trailing, values: trendAxisRatios) { value in
+                            AxisTick().foregroundStyle(Color.green.opacity(0.65))
+                            AxisValueLabel {
+                                if let ratio = value.as(Double.self) {
+                                    Text(interpolatedValue(in: incomeTrendDomain, ratio: ratio).cnyAxisText)
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 ContentUnavailableView("暂无趋势数据", systemImage: "chart.bar")
@@ -272,7 +298,7 @@ private var summaryGrid: some View {
                         }
                     }
                     .chartLegend(.hidden)
-                    .chartYScale(domain: categoryTrendYDomain)
+                    .chartYScale(domain: expandedAxisDomain(categoryTrendYDomain))
                     .chartYAxis { nativeYAxisMarks(values: categoryTrendYTicks.map(\.value)) }
                     .chartForegroundStyleScale(
                         domain: categoryTrendSeriesNames,
@@ -385,9 +411,9 @@ private var summaryGrid: some View {
     private var rootExpenseCategories: [LedgerCategory] {
         store.flattenedCategories
             .filter { category in
-                category.level == 1 &&
+                category.parentId == nil &&
                 category.flowType == .expense &&
-                store.flattenedCategories.contains { $0.parentId == category.id && $0.level == 2 }
+                store.flattenedCategories.contains { $0.parentId == category.id }
             }
             .sorted { $0.id < $1.id }
     }
@@ -448,9 +474,34 @@ private var summaryGrid: some View {
 
     private func categoryTrendColor(for category: String) -> Color {
         guard let color = store.flattenedCategories.first(where: {
-            $0.level == 1 && $0.name == category
+            $0.parentId == nil && $0.name == category
         })?.color else { return .accentColor }
         return Color(hex: color)
+    }
+
+    private var trendAxisRatios: [Double] { [0, 1.0 / 3.0, 2.0 / 3.0, 1] }
+
+    private var expenseTrendDomain: ClosedRange<Double> {
+        positivePaddedDomain(for: (store.overview?.trend ?? []).map(\.expense))
+    }
+
+    private var incomeTrendDomain: ClosedRange<Double> {
+        paddedDomain(for: (store.overview?.trend ?? []).flatMap { [$0.income, $0.balance] })
+    }
+
+    private func normalized(_ value: Double, in domain: ClosedRange<Double>) -> Double {
+        let span = domain.upperBound - domain.lowerBound
+        guard span > 0 else { return 0.5 }
+        return (value - domain.lowerBound) / span
+    }
+
+    private func interpolatedValue(in domain: ClosedRange<Double>, ratio: Double) -> Double {
+        domain.lowerBound + (domain.upperBound - domain.lowerBound) * ratio
+    }
+
+    private func expandedAxisDomain(_ domain: ClosedRange<Double>) -> ClosedRange<Double> {
+        let span = max(domain.upperBound - domain.lowerBound, 1)
+        return domain.lowerBound...(domain.upperBound + span * 0.08)
     }
 
     @AxisContentBuilder
@@ -840,7 +891,7 @@ private struct ScrollableDistributionBarChart: View {
          }
        }
        .chartLegend(.hidden)
-       .chartYScale(domain: yDomain)
+       .chartYScale(domain: yDomain.lowerBound...(yDomain.upperBound + max(yDomain.upperBound - yDomain.lowerBound, 1) * 0.08))
        .chartYAxis {
          AxisMarks(position: .leading, values: yTicks.map(\.value)) { value in
            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))

@@ -896,8 +896,11 @@ final class LedgerStore: ObservableObject {
 
         var inserted = false
         for (rootName, childNames) in DemoData.supplementalDefaultSubcategories {
-            guard let root = flattenedCategories.first(where: { $0.level == 0 && $0.name == rootName }) else { continue }
-            let existingNames = Set(root.children.map(\.name))
+            guard let root = flattenedCategories.first(where: { $0.parentId == nil && $0.name == rootName }) else { continue }
+            let existingNames = Set(flattenedCategories.compactMap { category -> String? in
+                guard category.parentId == root.id else { return nil }
+                return category.pathComponents.last
+            })
             for childName in childNames where !existingNames.contains(childName) {
                 let child = LedgerCategory(
                     id: nextCategoryId,
