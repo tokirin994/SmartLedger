@@ -224,7 +224,7 @@ private var summaryGrid: some View {
                     }
                     .chartLegend(.hidden)
                     .chartYScale(domain: trendYDomain)
-                    .chartYAxis(.hidden)
+                    .chartYAxis { nativeYAxisMarks(values: trendYTicks.map(\.value)) }
                 }
             } else {
                 ContentUnavailableView("暂无趋势数据", systemImage: "chart.bar")
@@ -272,7 +272,7 @@ private var summaryGrid: some View {
                     }
                     .chartLegend(.hidden)
                     .chartYScale(domain: categoryTrendYDomain)
-                    .chartYAxis(.hidden)
+                    .chartYAxis { nativeYAxisMarks(values: categoryTrendYTicks.map(\.value)) }
                 }
             }
         }
@@ -378,7 +378,11 @@ private var summaryGrid: some View {
 
     private var rootExpenseCategories: [LedgerCategory] {
         store.flattenedCategories
-            .filter { $0.level == 1 && $0.flowType == .expense }
+            .filter { category in
+                category.level == 1 &&
+                category.flowType == .expense &&
+                store.flattenedCategories.contains { $0.parentId == category.id && $0.level == 2 }
+            }
             .sorted { $0.id < $1.id }
     }
 
@@ -433,10 +437,27 @@ private var summaryGrid: some View {
     }
 
     private func categoryTrendColor(for category: String) -> Color {
-        let palette: [Color] = [.blue, .orange, .green, .purple, .pink, .teal, .red, .indigo]
-        let labels = (store.categoryTrend?.series.map(\.category) ?? []).sorted()
-        guard let index = labels.firstIndex(of: category) else { return .accentColor }
-        return palette[index % palette.count]
+        guard let color = store.flattenedCategories.first(where: {
+            $0.level == 1 && $0.name == category
+        })?.color else { return .accentColor }
+        return Color(hex: color)
+    }
+
+    @AxisContentBuilder
+    private func nativeYAxisMarks(values: [Double]) -> some AxisContent {
+        AxisMarks(position: .leading, values: values) { value in
+            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                .foregroundStyle(Color.secondary.opacity(0.16))
+            AxisTick(stroke: StrokeStyle(lineWidth: 0.8))
+                .foregroundStyle(Color.secondary.opacity(0.35))
+            AxisValueLabel {
+                if let amount = value.as(Double.self) {
+                    Text(amount.cnyAxisText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private func paddedDomain(for values: [Double]) -> ClosedRange<Double> {
@@ -810,7 +831,21 @@ private struct ScrollableDistributionBarChart: View {
        }
        .chartLegend(.hidden)
        .chartYScale(domain: yDomain)
-       .chartYAxis(.hidden)
+       .chartYAxis {
+         AxisMarks(position: .leading, values: yTicks.map(\.value)) { value in
+           AxisGridLine(stroke: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+             .foregroundStyle(Color.secondary.opacity(0.16))
+           AxisTick(stroke: StrokeStyle(lineWidth: 0.8))
+             .foregroundStyle(Color.secondary.opacity(0.35))
+           AxisValueLabel {
+             if let amount = value.as(Double.self) {
+               Text(amount.cnyAxisText)
+                 .font(.caption2)
+                 .foregroundStyle(.secondary)
+             }
+           }
+         }
+       }
      }
    }
  }
@@ -844,45 +879,19 @@ private struct FixedYAxisScrollableChart<Content: View>: View {
  
    var body: some View {
      GeometryReader { geometry in
-       let plotWidth = max(geometry.size.width - axisWidth - spacing, 120)
-       let contentWidth = max(plotWidth, CGFloat(max(itemCount, 1)) * minimumSlotWidth)
- 
-       HStack(alignment: .top, spacing: spacing) {
-         FixedYAxisLabelsView(domain: yDomain, ticks: yTicks, style: axisStyle)
-           .frame(width: axisWidth, height: height)
- 
-         ScrollView(.horizontal, showsIndicators: false) {
-           content()
-             .frame(width: contentWidth, height: height)
-             .padding(.trailing, 10)
-         }
-         .frame(width: plotWidth, height: height)
+       // The native Charts axis stays in the same coordinate system as the
+       // marks. This avoids custom labels being clipped by nested scroll views.
+       let contentWidth = max(geometry.size.width, CGFloat(max(itemCount, 1)) * minimumSlotWidth + 72)
+
+       ScrollView(.horizontal, showsIndicators: false) {
+         content()
+           .frame(width: contentWidth, height: height)
+           .padding(.trailing, 10)
        }
-       .frame(height: height)
+       .frame(width: geometry.size.width, height: height)
      }
      .frame(height: height)
      .clipped()
-   }
- 
-   private var axisWidth: CGFloat {
-     let longest = yTicks.map { $0.label.count }.max() ?? 4
-     // Keep a real column for the fixed axis. Currency labels such as
-     // "¥38.2k" were previously squeezed into a 42pt column and could be
-     // clipped altogether when the chart was inside a scroll view.
-     let estimated = CGFloat(longest) * 7.0 + 18
-     switch axisStyle {
-     case .compact:
-       return min(max(estimated, 66), 82)
-     case .regular:
-       return min(max(estimated, 72), 92)
-     }
-   }
- 
-   private var spacing: CGFloat {
-     switch axisStyle {
-     case .compact: return 6
-     case .regular: return 8
-     }
    }
  }
 private enum FixedYAxisStyle {

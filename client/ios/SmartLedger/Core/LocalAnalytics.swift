@@ -134,9 +134,10 @@ enum LocalAnalytics {
       guard path.count >= 2 else { continue }
 
       let childName = path.count == 2 ? path[1] : (hasChildren ? "未分类" : rootCategory.name)
-      let childColor = path.count == 2
-        ? directChildColor(rootCategoryId: rootCategoryId, childName: childName, categories: categories)
-        : rootCategory.color
+      // A selected primary category is intentionally rendered as one hue
+      // family, so the detailed donut/bar chart remains visually connected to
+      // the same primary category used elsewhere on the dashboard.
+      let childColor = rootCategory.color
 
       let current = bucket[childName] ?? (0, childColor)
       bucket[childName] = (current.amount + tx.amount, childColor)
@@ -147,7 +148,17 @@ enum LocalAnalytics {
 
     return bucket.map { key, value in
       DistributionPoint(category: key, amount: value.amount, ratio: value.amount / totalExpense, color: value.color)
-    }.sorted { $0.amount > $1.amount }
+    }
+    .sorted { $0.amount > $1.amount }
+    .enumerated()
+    .map { index, item in
+      DistributionPoint(
+        category: item.category,
+        amount: item.amount,
+        ratio: item.ratio,
+        color: colorVariant(of: rootCategory.color, index: index)
+      )
+    }
   }
 
   private static func matchBudgetCategory(tx: LedgerTransaction, budget: BudgetItem, categories: [LedgerCategory]) -> Bool {
@@ -172,10 +183,22 @@ enum LocalAnalytics {
     flattenedRoot(for: categoryId, categories: categories)?.id
   }
 
-  private static func directChildColor(rootCategoryId: Int, childName: String, categories: [LedgerCategory]) -> String? {
-    categories.first(where: {
-      $0.parentId == rootCategoryId && $0.pathComponents.count == 2 && $0.pathComponents.last == childName
-    })?.color
+  private static func colorVariant(of hex: String?, index: Int) -> String? {
+    guard let hex else { return nil }
+    let normalized = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+    guard normalized.count == 6, let value = Int(normalized, radix: 16) else { return hex }
+    let red = Double((value >> 16) & 0xFF)
+    let green = Double((value >> 8) & 0xFF)
+    let blue = Double(value & 0xFF)
+    // Alternate subtly darker and lighter variants while retaining the hue.
+    let mixWithWhite = [0.0, 0.20, -0.16, 0.36, -0.28][index % 5]
+    func adjusted(_ component: Double) -> Int {
+      let result = mixWithWhite >= 0
+        ? component + (255 - component) * mixWithWhite
+        : component * (1 + mixWithWhite)
+      return min(max(Int(result.rounded()), 0), 255)
+    }
+    return String(format: "#%02X%02X%02X", adjusted(red), adjusted(green), adjusted(blue))
   }
 
   private static func flattenedRoot(for categoryId: Int, categories: [LedgerCategory]) -> LedgerCategory? {
@@ -200,3 +223,5 @@ enum LocalAnalytics {
     }
   }
 }
+
+private extension Int {}

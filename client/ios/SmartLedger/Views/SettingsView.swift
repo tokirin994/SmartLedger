@@ -32,6 +32,9 @@ struct SettingsView: View {
                     }
                 LabeledContent("配置状态", value: settings.jianguoyunConfigured ? "已配置" : "待填写")
                 LabeledContent("同步状态", value: store.syncState.title)
+                Text(store.cloudConnectionMessage)
+                    .font(.footnote)
+                    .foregroundStyle(store.cloudAccountStatus == .available ? .green : .secondary)
                 if let time = store.lastSyncAt { LabeledContent("最近同步", value: time.formatted(date: .abbreviated, time: .shortened)) }
                 Text(store.lastSyncMessage).font(.footnote).foregroundStyle(.secondary)
                 if store.syncState == .syncing || store.syncState == .checking { ProgressView("正在同步") }

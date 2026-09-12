@@ -25,6 +25,7 @@ final class LedgerStore: ObservableObject {
     @Published var cloudUserRecordName: String?
     @Published var lastSyncAt: Date?
     @Published var lastSyncMessage: String = "尚未同步"
+    @Published var cloudConnectionMessage: String = "尚未检查 WebDAV 连接"
     @Published var syncState: SyncState = .idle
     @Published var appleProfile: AppleAccountProfile?
     @Published var recommendedBookForDraft: LedgerBook?
@@ -723,7 +724,9 @@ final class LedgerStore: ObservableObject {
 
     func refreshCloudAccountState() async {
         syncState = .checking
-        cloudAccountStatus = await cloudStore.accountStatus()
+        let check = await cloudStore.checkConfiguration()
+        cloudAccountStatus = check.status
+        cloudConnectionMessage = check.message
         cloudUserRecordName = await cloudStore.userRecordName()
         if syncState == .checking {
             syncState = .idle

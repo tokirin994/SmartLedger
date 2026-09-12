@@ -1,5 +1,10 @@
 import Foundation
 
+struct WebDAVConnectionCheck: Sendable {
+    let status: CloudAccountStatus
+    let message: String
+}
+
 /// Jianguoyun WebDAV snapshot storage. The service deliberately keeps the
 /// existing sync interface so LedgerStore and persisted ledger models remain compatible.
 struct CloudSyncService {
@@ -30,28 +35,36 @@ struct CloudSyncService {
     }
 
     func accountStatus() async -> CloudAccountStatus {
-        guard endpoint != nil, !username.isEmpty, !password.isEmpty else { return .noAccount }
+        await checkConfiguration().status
+    }
+
+    func checkConfiguration() async -> WebDAVConnectionCheck {
+        guard endpoint != nil, !username.isEmpty, !password.isEmpty else {
+            return WebDAVConnectionCheck(status: .noAccount, message: "尚未发起请求：请填写 WebDAV 地址、账号和应用密码")
+        }
         do {
             let (_, response) = try await perform(method: "PROPFIND", body: nil, url: directoryURL)
-            guard let http = response as? HTTPURLResponse else { return .couldNotDetermine }
+            guard let http = response as? HTTPURLResponse else {
+                return WebDAVConnectionCheck(status: .couldNotDetermine, message: "WebDAV 返回了非 HTTP 响应")
+            }
             switch http.statusCode {
-            case 200, 204, 207: return .available
-            case 401: return .noAccount
-            case 403: return .restricted
-            case 404: return .available // Credentials are valid; the folder is created before the first upload.
-            case 500...599: return .temporarilyUnavailable
-            default: return .couldNotDetermine
+            case 200, 204, 207:
+                return WebDAVConnectionCheck(status: .available, message: "WebDAV 连接成功（HTTP \(http.statusCode)）")
+            case 401:
+                return WebDAVConnectionCheck(status: .noAccount, message: "WebDAV 返回 HTTP 401：账号或应用密码错误；请使用坚果云“应用密码”")
+            case 403:
+                return WebDAVConnectionCheck(status: .restricted, message: "WebDAV 返回 HTTP 403：账号已认证但没有该目录的访问权限")
+            case 404:
+                return WebDAVConnectionCheck(status: .available, message: "WebDAV 返回 HTTP 404：认证正常，首次推送时将自动创建 SmartLedger 目录")
+            case 500...599:
+                return WebDAVConnectionCheck(status: .temporarilyUnavailable, message: "WebDAV 返回 HTTP \(http.statusCode)：坚果云服务暂不可用")
+            default:
+                return WebDAVConnectionCheck(status: .couldNotDetermine, message: "WebDAV 返回 HTTP \(http.statusCode)：请检查地址是否为 /dav/ 路径")
             }
         } catch let error as WebDAVError {
-            switch error {
-            case .notConfigured: return .noAccount
-            case .httpStatus(401): return .noAccount
-            case .httpStatus(403): return .restricted
-            case .httpStatus(let code) where (500...599).contains(code): return .temporarilyUnavailable
-            default: return .couldNotDetermine
-            }
+            return WebDAVConnectionCheck(status: .couldNotDetermine, message: "WebDAV 检查失败：\(error.localizedDescription)")
         } catch {
-            return .couldNotDetermine
+            return WebDAVConnectionCheck(status: .couldNotDetermine, message: "WebDAV 检查失败：\(error.localizedDescription)")
         }
     }
 
