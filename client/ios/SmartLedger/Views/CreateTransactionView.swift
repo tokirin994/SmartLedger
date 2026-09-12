@@ -62,13 +62,6 @@ struct CreateTransactionView: View {
 
                 Section("分类") {
                     Button {
-                        categoryCreationParentId = nil
-                        showCreateCategorySheet = true
-                    } label: {
-                        Label("新建一级分类", systemImage: "folder.badge.plus")
-                    }
-
-                    Button {
                         showCategoryPicker = true
                     } label: {
                         HStack {
@@ -476,6 +469,18 @@ private struct CategoryRootPickerSheet: View {
                             categoryRow(category)
                         }
                     }
+                }
+            }
+
+            if let onCreateCategory {
+                Section {
+                    Button {
+                        onCreateCategory(nil)
+                    } label: {
+                        Label("新建一级分类", systemImage: "folder.badge.plus")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -1102,5 +1107,4 @@ private struct DismissAttemptObserver: UIViewControllerRepresentable {
         }
     }
 }
-
 
