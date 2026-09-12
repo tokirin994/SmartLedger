@@ -81,6 +81,10 @@ final class LedgerStore: ObservableObject {
             errorMessage = "读取本地数据失败，已回退到默认数据: \(error.localizedDescription)"
         }
 
+        if installSupplementalDefaultSubcategoriesIfNeeded() {
+            try? await persistLocalSnapshot(markUpdatedAt: true)
+        }
+
         refreshDerivedData()
 
         if cloudSyncEnabled {
@@ -883,6 +887,34 @@ final class LedgerStore: ObservableObject {
         nextCategoryId = (flattenedCategories.map(\.id).max() ?? 0) + 1
         nextBudgetId = (budgets.map(\.id).max() ?? 0) + 1
         refreshDerivedData()
+    }
+
+    private func installSupplementalDefaultSubcategoriesIfNeeded() -> Bool {
+        let versionKey = "smartledgerlocal.defaultCategoryCatalogVersion"
+        guard UserDefaults.standard.integer(forKey: versionKey) < 2 else { return false }
+        defer { UserDefaults.standard.set(2, forKey: versionKey) }
+
+        var inserted = false
+        for (rootName, childNames) in DemoData.supplementalDefaultSubcategories {
+            guard let root = flattenedCategories.first(where: { $0.level == 0 && $0.name == rootName }) else { continue }
+            let existingNames = Set(root.children.map(\.name))
+            for childName in childNames where !existingNames.contains(childName) {
+                let child = LedgerCategory(
+                    id: nextCategoryId,
+                    name: childName,
+                    flowType: root.flowType,
+                    icon: root.icon,
+                    color: root.color,
+                    parentId: root.id,
+                    level: root.level + 1,
+                    children: []
+                )
+                nextCategoryId += 1
+                categories = CategoryTreeBuilder.insert(child, into: categories)
+                inserted = true
+            }
+        }
+        return inserted
     }
 
     private func refreshDerivedData() {

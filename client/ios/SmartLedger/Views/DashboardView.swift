@@ -225,6 +225,7 @@ private var summaryGrid: some View {
                     .chartLegend(.hidden)
                     .chartYScale(domain: trendYDomain)
                     .chartYAxis { nativeYAxisMarks(values: trendYTicks.map(\.value)) }
+                    .chartPlotStyle { plot in plot.padding(.top, 16) }
                 }
             } else {
                 ContentUnavailableView("暂无趋势数据", systemImage: "chart.bar")
@@ -261,18 +262,23 @@ private var summaryGrid: some View {
                                 series: .value("分类", point.category)
                             )
                             .interpolationMethod(.linear)
-                            .foregroundStyle(categoryTrendColor(for: point.category))
+                            .foregroundStyle(by: .value("分类", point.category))
 
                             PointMark(
                                 x: .value("时间", point.label),
                                 y: .value("金额", point.value)
                             )
-                            .foregroundStyle(categoryTrendColor(for: point.category))
+                            .foregroundStyle(by: .value("分类", point.category))
                         }
                     }
                     .chartLegend(.hidden)
                     .chartYScale(domain: categoryTrendYDomain)
                     .chartYAxis { nativeYAxisMarks(values: categoryTrendYTicks.map(\.value)) }
+                    .chartForegroundStyleScale(
+                        domain: categoryTrendSeriesNames,
+                        range: categoryTrendSeriesNames.map(categoryTrendColor(for:))
+                    )
+                    .chartPlotStyle { plot in plot.padding(.top, 16) }
                 }
             }
         }
@@ -282,7 +288,7 @@ private var summaryGrid: some View {
         SectionCard(title: "分类占比", subtitle: distributionSubtitle, headerTrailing: {
             HStack(spacing: 8) {
                 Menu {
-                    Button("全部大类") {
+                    Button("全部一级分类") {
                         selectedDistributionRootId = nil
                     }
 
@@ -351,7 +357,7 @@ private var summaryGrid: some View {
            let category = rootExpenseCategories.first(where: { $0.id == selectedRootId }) {
             return "当前查看「\(category.name)」下各子类支出占比"
         }
-        return "默认按大类统计本区间支出占比，点击图表可切换柱状图"
+        return "按全部一级分类统计本区间支出占比，点击图表可切换柱状图"
     }
 
     private var trendSubtitle: String {
@@ -363,7 +369,7 @@ private var summaryGrid: some View {
            let category = rootExpenseCategories.first(where: { $0.id == selectedRootId }) {
             return category.name
         }
-        return "全部大类"
+        return "全部一级分类"
     }
 
     private var distributionChartHeight: CGFloat {
@@ -408,6 +414,10 @@ private var summaryGrid: some View {
         (store.categoryTrend?.series ?? []).map {
             LegendDisplayItem(title: $0.category, color: categoryTrendColor(for: $0.category))
         }
+    }
+
+    private var categoryTrendSeriesNames: [String] {
+        (store.categoryTrend?.series.map(\.category) ?? []).sorted()
     }
 
     private var trendYDomain: ClosedRange<Double> {
@@ -846,6 +856,7 @@ private struct ScrollableDistributionBarChart: View {
            }
          }
        }
+       .chartPlotStyle { plot in plot.padding(.top, 16) }
      }
    }
  }
