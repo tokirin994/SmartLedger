@@ -91,48 +91,32 @@ private struct BookDetailView: View {
     private var current: LedgerBook { store.books.first(where: { $0.id == book.id }) ?? book }
     private func transactionAmountText(_ transaction: LedgerTransaction) -> String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
     private func transactionAmountColor(_ transaction: LedgerTransaction) -> Color { transaction.kind == .expense ? .primary : .green }
+    private var splitTransactions: [LedgerTransaction] { relatedTransactions.filter { $0.kind == .expense && !$0.splitParticipantIds.isEmpty } }
     var body: some View {
-        NavigationStack {
-            List {
-                Section("概览") {
-                    LabeledContent("流水数量", value: "\(current.transactionCount) 笔")
-                    LabeledContent("收入", value: current.incomeAmount.cnyText)
-                    LabeledContent("支出", value: current.expenseAmount.cnyText)
-                    LabeledContent("结余", value: current.balance.cnyText)
-                }
-                Section("高级规则") {
-                    LabeledContent("自动归集", value: current.autoCollectEnabled ? "已启用" : "未启用")
-                    LabeledContent("归集分类", value: current.autoCollectCategoryIds.isEmpty ? "全部分类" : "\(current.autoCollectCategoryIds.count) 个分类")
-                    LabeledContent("预算", value: current.budgetEnabled ? (current.budgetLimitAmount ?? 0).cnyText : "未设置")
-                    LabeledContent("成员", value: current.participantNames.isEmpty ? "仅自己" : current.participantNames.joined(separator: "、"))
-                }
-                if let start = current.startDate { Section("账本期间") { LabeledContent("开始", value: start.formatted(date: .abbreviated, time: .omitted)); if let end = current.endDate { LabeledContent("结束", value: end.formatted(date: .abbreviated, time: .omitted)) } } }
-                Section("归集流水") {
-                    if relatedTransactions.isEmpty { Text("暂无归集流水").foregroundStyle(.secondary) }
-                    ForEach(relatedTransactions) { tx in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(tx.title)
-                                Text(tx.happenedAt.formatted(date: .abbreviated, time: .omitted)).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(transactionAmountText(tx)).foregroundStyle(transactionAmountColor(tx))
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("剔除", systemImage: "minus.circle") }
-                        }
-                    }
-                }
-            }
-            .navigationTitle(current.name)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Menu { Button("设置") { showingEditor = true }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "ellipsis.circle") } }
-            }
-            .sheet(isPresented: $showingEditor) { BookEditorView(book: current).environmentObject(store) }
-            .alert("删除账本？", isPresented: $deleteRequested) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { Task { await store.deleteBook(current.id) }; dismiss() } } message: { Text("删除账本不会删除流水，只会移除关联。") }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(current.note?.isEmpty == false ? current.note! : "将相关流水归集在一起").foregroundStyle(.secondary)
+                    HStack(spacing: 10) { metric("支出", current.expenseAmount.cnyText, .orange); metric("收入", current.incomeAmount.cnyText, .green); metric("净额", current.balance.cnyText, current.balance < 0 ? .red : .blue) }
+                    if !current.participantNames.isEmpty { Text("分账成员").font(.caption).foregroundStyle(.secondary); ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(current.participantNames, id: \.self) { Text($0).padding(.horizontal, 11).padding(.vertical, 6).background(.blue.opacity(0.1), in: Capsule()) } } } }
+                }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15)
+                if current.budgetEnabled { budgetCard }
+                if !splitTransactions.isEmpty { splitCard }
+                transactionsCard
+            }.padding()
         }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .navigationTitle(current.name).navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Menu { Button("设置") { showingEditor = true }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "gearshape") } } }
+        .sheet(isPresented: $showingEditor) { BookEditorView(book: current).environmentObject(store) }
+        .alert("删除账本？", isPresented: $deleteRequested) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { Task { await store.deleteBook(current.id) }; dismiss() } } message: { Text("删除账本不会删除流水，只会移除关联。") }
     }
+
+    private var budgetCard: some View { let limit = current.budgetLimitAmount ?? 0; let remaining = limit - current.expenseAmount; return VStack(alignment: .leading, spacing: 12) { Text("账本预算").font(.title3.bold()); HStack(spacing: 10) { metric("预算", limit.cnyText, .blue); metric("已用", current.expenseAmount.cnyText, .orange); metric("剩余", remaining.cnyText, remaining < 0 ? .red : .green) }; ProgressView(value: min(max(current.expenseAmount / max(limit, 1), 0), 1)).tint(remaining < 0 ? .red : .blue); Text("预算周期：\(periodText)").font(.caption).foregroundStyle(.secondary) }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
+    private var splitCard: some View { VStack(alignment: .leading, spacing: 14) { Text("最终分账").font(.title3.bold()); ForEach(current.participants) { member in let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }; let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }; let net = paid - owed; VStack(alignment: .leading, spacing: 8) { HStack { Text(member.name).font(.headline); Spacer(); Text(net >= 0 ? "应收 \(net.cnyText)" : "应付 \((-net).cnyText)").foregroundStyle(net >= 0 ? .green : .orange) }; HStack(spacing: 10) { metric("已支付", paid.cnyText, .blue); metric("应承担", owed.cnyText, .purple) } } } }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
+    private var transactionsCard: some View { VStack(alignment: .leading, spacing: 10) { Text("归集流水").font(.title3.bold()); if relatedTransactions.isEmpty { ContentUnavailableView("暂无归集流水", systemImage: "tray") }; ForEach(relatedTransactions) { tx in HStack { VStack(alignment: .leading, spacing: 3) { Text(tx.title); Text(tx.happenedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(transactionAmountText(tx)).foregroundStyle(transactionAmountColor(tx)) }.padding(12).glassCard(cornerRadius: 14, strokeOpacity: 0.12).contextMenu { Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("从账本剔除", systemImage: "minus.circle") } } } } }
+    private var periodText: String { guard let start = current.startDate else { return "未限定" }; let begin = start.formatted(date: .abbreviated, time: .omitted); return current.endDate.map { "\(begin) - \($0.formatted(date: .abbreviated, time: .omitted))" } ?? "自 \(begin) 起" }
+    private func metric(_ title: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.subheadline.bold()).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.65) }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12)) }
 }
 
 private struct BookEditorView: View {
