@@ -102,6 +102,7 @@ struct CategoryEditorView: View {
     @State private var icon = "folder"
     @State private var color = "#5AA38B"
     @State private var iconPickerExpanded = false
+    @State private var saveFailureMessage: String?
 
     let title: String
     var preselectedFlowType: FlowType?
@@ -223,6 +224,7 @@ struct CategoryEditorView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("保存") {
                         Task {
+                            store.errorMessage = nil
                             let draft = CategoryDraft(
                                 name: name,
                                 flowType: flowType,
@@ -231,6 +233,10 @@ struct CategoryEditorView: View {
                                 parentId: parentId
                             )
                             await store.createCategory(draft)
+                            if let error = store.errorMessage {
+                                saveFailureMessage = error
+                                return
+                            }
                             let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
                             let candidates = store.flattenedCategories.filter { $0.name == trimmedName }
                             if let created = candidates.first(where: { $0.flowType == flowType && $0.parentId == parentId }) {
@@ -239,8 +245,12 @@ struct CategoryEditorView: View {
                             dismiss()
                         }
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+            .alert("无法保存分类", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) {
+                Button("知道了", role: .cancel) {}
+            } message: {
+                Text(saveFailureMessage ?? "请检查分类信息后重试。")
             }
         }
     }
@@ -376,5 +386,8 @@ private struct CreateCategoryView: View {
         CategoryEditorSheet()
     }
 }
-
-
+// Duplicate declaration removed; the private view above is the sheet entry point.
+/*
+    }
+}
+*/

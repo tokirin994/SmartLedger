@@ -12,6 +12,7 @@ struct CreateTransactionView: View {
     @State private var categoryCreationParentId: Int?
     @State private var showCategoryPicker = false
     @State private var showUnsavedChangesDialog = false
+    @State private var saveFailureMessage: String?
 
     init(editingTransaction: LedgerTransaction? = nil) {
         self.editingTransaction = editingTransaction
@@ -31,9 +32,8 @@ struct CreateTransactionView: View {
 
     private var suggestedBooks: [LedgerBook] {
         let selectedIds = Set(draft.bookIds)
-        return store.recommendedBooks(for: draft.happenedAt).filter {
-            !selectedIds.contains($0.id) && ($0.autoCollectCategoryIds.isEmpty || $0.autoCollectCategoryIds.contains(draft.categoryId ?? -1))
-        }
+        // “符合账本期间”只是创建时的辅助推荐，不应受自动归集开关或归集类别限制。
+        return store.recommendedBooks(for: draft.happenedAt).filter { !selectedIds.contains($0.id) }
     }
 
     private var splitParticipants: [BookParticipant] {
@@ -61,6 +61,13 @@ struct CreateTransactionView: View {
                 }
 
                 Section("分类") {
+                    Button {
+                        categoryCreationParentId = nil
+                        showCreateCategorySheet = true
+                    } label: {
+                        Label("新建一级分类", systemImage: "folder.badge.plus")
+                    }
+
                     Button {
                         showCategoryPicker = true
                     } label: {
@@ -246,12 +253,6 @@ struct CreateTransactionView: View {
             Button("保存") {
                 Task { await saveDraftAndDismiss() }
             }
-            .disabled(
-                draft.title.isEmpty ||
-                Double(draft.amount) == nil ||
-                (selectedBookSupportsSplit && (draft.paidByParticipantId == nil ||
-                draft.splitParticipantIds.isEmpty))
-            )
         }
     }
     .background(
@@ -296,9 +297,13 @@ struct CreateTransactionView: View {
     } message: {
         Text("退出前可以选择先保存，或者直接丢弃这次改动。")
     }
+    .alert("无法保存流水", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) {
+        Button("知道了", role: .cancel) {}
+    } message: {
+        Text(saveFailureMessage ?? "请检查填写内容后重试。")
+    }
 }
 }
-
 private var selectedBookNamesText: String {
     let names = selectedBooks.map(\.name)
     return names.isEmpty ? "不归属于主题账本" : names.joined(separator: "、")
@@ -342,6 +347,26 @@ private func attemptDismiss() {
 }
 
 private func saveDraftAndDismiss() async {
+    let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !title.isEmpty else {
+        saveFailureMessage = "请填写流水标题，例如“午餐”或“工资到账”。"
+        return
+    }
+    guard let amount = Double(draft.amount), amount > 0 else {
+        saveFailureMessage = "金额必须是大于 0 的数字。"
+        return
+    }
+    if selectedBookSupportsSplit && draft.paidByParticipantId == nil {
+        saveFailureMessage = "该账本启用了分账，请选择付款人。"
+        return
+    }
+    if selectedBookSupportsSplit && draft.splitParticipantIds.isEmpty {
+        saveFailureMessage = "该账本启用了分账，请至少选择一位分账成员。"
+        return
+    }
+
+    store.errorMessage = nil
+    draft.title = title
     if !draft.paymentMethod.isEmpty {
         draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
     }
@@ -354,7 +379,9 @@ private func saveDraftAndDismiss() async {
         await store.createTransaction(draft)
     }
 
-    if store.errorMessage == nil {
+    if let error = store.errorMessage {
+        saveFailureMessage = error
+    } else {
         dismiss()
     }
 }
@@ -1075,3 +1102,5 @@ private struct DismissAttemptObserver: UIViewControllerRepresentable {
         }
     }
 }
+
+

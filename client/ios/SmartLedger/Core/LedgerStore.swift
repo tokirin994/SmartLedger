@@ -326,7 +326,7 @@ final class LedgerStore: ObservableObject {
 
   func updateBook(_ id: Int, with draft: BookDraft) async {
     guard let index = books.firstIndex(where: { $0.id == id }) else {
-      let errorMessage = "未找到要修改的账本"
+      errorMessage = "无法保存账本：未找到要修改的账本。"
       return
     }
 
@@ -459,6 +459,48 @@ final class LedgerStore: ObservableObject {
     await persistAndMaybeSync(reason: "已批量归集到账本")
   }
 
+  func applyAutoCollectRules(
+    to bookId: Int,
+    removeNonMatchingExisting: Bool,
+    collectUnassignedNow: Bool
+  ) async {
+    guard let book = books.first(where: { $0.id == bookId }) else {
+      errorMessage = "无法应用归集规则：账本不存在。"
+      return
+    }
+
+    if removeNonMatchingExisting {
+      for index in transactions.indices where transactions[index].bookIds.contains(bookId) || transactions[index].bookId == bookId {
+        let transaction = transactions[index]
+        guard !shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId) else { continue }
+        var ids = transaction.bookIds
+        var names = transaction.bookNames
+        if let position = ids.firstIndex(of: bookId) {
+          ids.remove(at: position)
+          if names.indices.contains(position) { names.remove(at: position) }
+          transactions[index] = rebuildTransaction(transaction, bookId: ids.first, bookName: names.first, bookIds: ids, bookNames: names)
+        }
+      }
+    }
+
+    if collectUnassignedNow {
+      for index in transactions.indices {
+        let transaction = transactions[index]
+        guard transaction.bookIds.isEmpty,
+              transaction.bookId == nil,
+              shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId) else { continue }
+        var ids = transaction.bookIds
+        var names = transaction.bookNames
+        ids.append(bookId)
+        names.append(book.name)
+        transactions[index] = rebuildTransaction(transaction, bookId: ids.first, bookName: names.first, bookIds: ids, bookNames: names)
+      }
+    }
+
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "自动归集规则已应用")
+  }
+
   func deleteBook(_ bookId: Int) async {
     guard let deletingBook = books.first(where: { $0.id == bookId }) else { return }
     books.removeAll { $0.id == bookId }
@@ -537,11 +579,20 @@ final class LedgerStore: ObservableObject {
   }
 
   func createCategory(_ draft: CategoryDraft) async {
+    let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else {
+      errorMessage = "分类名称不能为空。"
+      return
+    }
+    if flattenedCategories.contains(where: { $0.parentId == draft.parentId && $0.flowType == draft.flowType && $0.pathComponents.last == name }) {
+      errorMessage = "同一上级分类下已存在“\(name)”。"
+      return
+    }
     let parent = flattenedCategories.first(where: { $0.id == draft.parentId })
     let level = (parent?.level ?? 0) + 1
     let node = LedgerCategory(
       id: nextCategoryId,
-      name: draft.name,
+      name: name,
       flowType: draft.flowType,
       icon: draft.icon,
       color: draft.color,
