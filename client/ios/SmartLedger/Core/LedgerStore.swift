@@ -806,9 +806,10 @@ final class LedgerStore: ObservableObject {
             let remoteSnapshot = try await cloudStore.fetchSnapshot()
             if let remoteSnapshot {
                 let interval = abs(remoteSnapshot.updatedAt.timeIntervalSince(localSnapshot.updatedAt))
-                let localTransactionsData = try? JSONEncoder.iso8601.encode(localSnapshot.transactions)
-                let remoteTransactionsData = try? JSONEncoder.iso8601.encode(remoteSnapshot.transactions)
-                let diverged = remoteSnapshot.updatedAt != localSnapshot.updatedAt && localTransactionsData != remoteTransactionsData
+                // 冲突检测必须覆盖整份账本快照，不能只比较流水；否则两端同时
+                // 修改分类、预算或账本时会被误判为“已一致”。
+                let diverged = remoteSnapshot.updatedAt != localSnapshot.updatedAt
+                    && snapshotContentData(remoteSnapshot) != snapshotContentData(localSnapshot)
 
                 if diverged && interval < 300 {
                     pendingRemoteSnapshot = remoteSnapshot
@@ -1105,6 +1106,14 @@ final class LedgerStore: ObservableObject {
             nextBudgetId: nextBudgetId,
             updatedAt: snapshotUpdatedAt
         )
+    }
+
+    /// Returns a stable representation of every synchronised domain object,
+    /// deliberately excluding only the timestamp used for version ordering.
+    private func snapshotContentData(_ snapshot: PersistedLedgerSnapshot) -> Data? {
+        var content = snapshot
+        content.updatedAt = Date(timeIntervalSince1970: 0)
+        return try? JSONEncoder.iso8601.encode(content)
     }
 
     private func apply(_ snapshot: PersistedLedgerSnapshot) {
