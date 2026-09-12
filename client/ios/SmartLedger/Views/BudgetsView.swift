@@ -56,8 +56,9 @@ struct BudgetView: View {
        .font(.caption)
        .foregroundStyle(.secondary)
    }
-   .frame(maxWidth: .infinity, alignment: .leading)
-   .padding(.vertical, 6)
+   .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+   .padding(.horizontal, 14)
+   .padding(.vertical, 12)
    .glassCard(cornerRadius: 20, strokeOpacity: 0.22)
  }
 
@@ -143,7 +144,9 @@ struct BudgetStatCard: View {
        .font(.subheadline.weight(.bold))
        .foregroundStyle(tint)
    }
-   .frame(maxWidth: .infinity, alignment: .leading)
+   .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+   .padding(10)
+   .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
  }
 
  private var remaining: Double {

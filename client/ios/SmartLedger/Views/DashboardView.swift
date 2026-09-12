@@ -185,16 +185,6 @@ private var summaryGrid: some View {
             if let trend = store.overview?.trend, !trend.isEmpty {
                 CompactLegendView(items: trendLegendItems)
 
-                HStack {
-                    Text("左轴 · 支出")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
-                    Spacer()
-                    Text("右轴 · 收入 / 结余")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.green)
-                }
-
                 FixedYAxisScrollableChart(
                     itemCount: trend.count,
                     minimumSlotWidth: 58,
@@ -209,21 +199,29 @@ private var summaryGrid: some View {
                                 x: .value("时间", item.label),
                                 y: .value("支出", normalized(item.expense, in: expenseTrendDomain))
                             )
-                            .foregroundStyle(Color.orange.gradient)
+                            .foregroundStyle(Color.orange.gradient.opacity(0.82))
+
+                            AreaMark(
+                                x: .value("时间", item.label),
+                                y: .value("收入面积", normalized(item.income, in: incomeTrendDomain))
+                            )
+                            .foregroundStyle(Color.green.opacity(0.16))
+                            .interpolationMethod(.linear)
 
                             LineMark(
                                 x: .value("时间", item.label),
                                 y: .value("收入", normalized(item.income, in: incomeTrendDomain))
                             )
                             .foregroundStyle(Color.green)
-                            .symbol(Circle())
+                            .lineStyle(StrokeStyle(lineWidth: 2.5))
+                            .symbol(Circle().strokeBorder(lineWidth: 2))
 
                             LineMark(
                                 x: .value("时间", item.label),
                                 y: .value("结余", normalized(item.balance, in: incomeTrendDomain))
                             )
                             .foregroundStyle(Color.blue)
-                            .lineStyle(StrokeStyle(lineWidth: 2, dash: [4, 3]))
+                            .lineStyle(StrokeStyle(lineWidth: 2.2, dash: [5, 3]))
                         }
                     }
                     .chartLegend(.hidden)

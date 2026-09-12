@@ -66,17 +66,24 @@ struct BooksView: View {
 private struct BookRow: View {
     let book: LedgerBook
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: book.icon ?? "book.closed.fill")
-                .font(.title3).foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
-                .frame(width: 30)
+                .font(.title3.weight(.semibold)).foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
+                .frame(width: 44, height: 44)
+                .background(Color(hex: book.color ?? "#4F46E5").opacity(0.13), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 HStack { Text(book.name).font(.headline); if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) } }
                 Text(book.note ?? "未填写说明").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Text("流水 \(book.transactionCount) 笔 · 余额 \(book.balance.cnyText)").font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 8) { Label("\(book.transactionCount)", systemImage: "list.bullet"); Text("净额 \(book.balance.cnyText)") }
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
-        }.padding(.vertical, 5)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .background(Color(hex: book.color ?? "#4F46E5").opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color(hex: book.color ?? "#4F46E5").opacity(0.14), lineWidth: 1) }
+        .padding(.vertical, 3)
     }
 }
 
@@ -114,9 +121,9 @@ private struct BookDetailView: View {
 
     private var budgetCard: some View { let limit = current.budgetLimitAmount ?? 0; let remaining = limit - current.expenseAmount; return VStack(alignment: .leading, spacing: 12) { Text("账本预算").font(.title3.bold()); HStack(spacing: 10) { metric("预算", limit.cnyText, .blue); metric("已用", current.expenseAmount.cnyText, .orange); metric("剩余", remaining.cnyText, remaining < 0 ? .red : .green) }; ProgressView(value: min(max(current.expenseAmount / max(limit, 1), 0), 1)).tint(remaining < 0 ? .red : .blue); Text("预算周期：\(periodText)").font(.caption).foregroundStyle(.secondary) }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
     private var splitCard: some View { VStack(alignment: .leading, spacing: 14) { Text("最终分账").font(.title3.bold()); ForEach(current.participants) { member in let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }; let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }; let net = paid - owed; VStack(alignment: .leading, spacing: 8) { HStack { Text(member.name).font(.headline); Spacer(); Text(net >= 0 ? "应收 \(net.cnyText)" : "应付 \((-net).cnyText)").foregroundStyle(net >= 0 ? .green : .orange) }; HStack(spacing: 10) { metric("已支付", paid.cnyText, .blue); metric("应承担", owed.cnyText, .purple) } } } }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
-    private var transactionsCard: some View { VStack(alignment: .leading, spacing: 10) { Text("归集流水").font(.title3.bold()); if relatedTransactions.isEmpty { ContentUnavailableView("暂无归集流水", systemImage: "tray") }; ForEach(relatedTransactions) { tx in HStack { VStack(alignment: .leading, spacing: 3) { Text(tx.title); Text(tx.happenedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(transactionAmountText(tx)).foregroundStyle(transactionAmountColor(tx)) }.padding(12).glassCard(cornerRadius: 14, strokeOpacity: 0.12).contextMenu { Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("从账本剔除", systemImage: "minus.circle") } } } } }
+    private var transactionsCard: some View { VStack(alignment: .leading, spacing: 10) { HStack { Text("归集流水").font(.title3.bold()); Spacer(); Text("\(relatedTransactions.count) 笔").font(.caption).foregroundStyle(.secondary) }; if relatedTransactions.isEmpty { ContentUnavailableView("暂无归集流水", systemImage: "tray") }; ForEach(relatedTransactions) { tx in HStack(spacing: 12) { Image(systemName: tx.kind == .expense ? "arrow.up.right.circle.fill" : "arrow.down.left.circle.fill").font(.title3).foregroundStyle(tx.kind == .expense ? .orange : .green).frame(width: 30); VStack(alignment: .leading, spacing: 4) { Text(tx.title).font(.subheadline.weight(.semibold)); HStack(spacing: 6) { Text(tx.categoryName ?? "未分类"); Text("·"); Text(tx.happenedAt.formatted(date: .abbreviated, time: .shortened)) }.font(.caption).foregroundStyle(.secondary) }; Spacer(); Text(transactionAmountText(tx)).font(.subheadline.weight(.bold)).foregroundStyle(transactionAmountColor(tx)) }.padding(12).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous)).overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }.contextMenu { Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("从账本剔除", systemImage: "minus.circle") } } } } }
     private var periodText: String { guard let start = current.startDate else { return "未限定" }; let begin = start.formatted(date: .abbreviated, time: .omitted); return current.endDate.map { "\(begin) - \($0.formatted(date: .abbreviated, time: .omitted))" } ?? "自 \(begin) 起" }
-    private func metric(_ title: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.subheadline.bold()).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.65) }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12)) }
+    private func metric(_ title: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.subheadline.bold()).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.65) }.frame(maxWidth: .infinity, minHeight: 62, alignment: .leading).padding(10).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12)) }
 }
 
 private struct BookEditorView: View {
@@ -139,6 +146,7 @@ private struct BookEditorView: View {
     @State private var newMember = ""
     @State private var showAutoCollectSetup = false
     @State private var collectExistingNow = false
+    @State private var autoCollectScopeConfirmed = false
     @State private var iconPickerExpanded = false
 
     init(book: LedgerBook?) {
@@ -210,7 +218,7 @@ private struct BookEditorView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } }
             .task { if store.categories.isEmpty { await store.loadCategories() } }
             .sheet(isPresented: $showAutoCollectSetup) {
-                NavigationStack { VStack(alignment: .leading, spacing: 18) { Text("开启自动归集").font(.title3.bold()); Text("保存后，新流水会按账本日期范围和分类规则归集。你也可以选择立即归集已有流水。").foregroundStyle(.secondary); Toggle("保存后主动归集一次已有流水", isOn: $collectExistingNow); Spacer(); HStack { Button("取消") { showAutoCollectSetup = false }; Spacer(); Button("开启") { autoCollectEnabled = true; showAutoCollectSetup = false }.buttonStyle(.borderedProminent) } }.padding().navigationTitle("开启自动归集").navigationBarTitleDisplayMode(.inline) }
+                NavigationStack { Form { Section { Text("请先确认归集范围。开启后，新流水会按账本日期范围及所选分类自动归入本账本。").foregroundStyle(.secondary) }; Section("归集类别") { NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: { LabeledContent("归集分类", value: selectedCategoryIDs.isEmpty ? "全部支出分类" : "已选 \(selectedCategoryIDs.count) 项") }; Toggle("我已确认归集类别", isOn: $autoCollectScopeConfirmed) }; Section("历史流水") { Toggle("立即全量归集现有符合条件的流水", isOn: $collectExistingNow); Text("不勾选则只对之后新增的流水生效。") .font(.footnote).foregroundStyle(.secondary) } }.navigationTitle("开启自动归集").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAutoCollectSetup = false } }; ToolbarItem(placement: .confirmationAction) { Button("确认开启") { autoCollectEnabled = true; showAutoCollectSetup = false }.disabled(!autoCollectScopeConfirmed) } } }
             }
         }
     }

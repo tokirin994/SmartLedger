@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject private var store: LedgerStore
     @EnvironmentObject private var settings: AppSettings
     @State private var cloudEnabled = false
+    @State private var cloudConfigurationExpanded = false
     @State private var newChannel = ""
     @State private var demoMessage: String?
 
@@ -16,35 +17,41 @@ struct SettingsView: View {
             }
 
             Section("坚果云 WebDAV 同步") {
-                TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                TextField("坚果云账号", text: $settings.jianguoyunUsername)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("应用密码", text: $settings.jianguoyunAppPassword)
-                Text("请在坚果云账户安全设置中创建应用密码；建议使用独立的 SmartLedger 目录。")
-                    .font(.footnote).foregroundStyle(.secondary)
                 Toggle("启用坚果云同步", isOn: $cloudEnabled)
                     .onChange(of: cloudEnabled) { _, enabled in
                         Task { await store.setCloudSyncEnabled(enabled) }
                     }
-                LabeledContent("配置状态", value: settings.jianguoyunConfigured ? "已配置" : "待填写")
-                LabeledContent("同步状态", value: store.syncState.title)
-                Text(store.cloudConnectionMessage)
-                    .font(.footnote)
-                    .foregroundStyle(store.cloudAccountStatus == .available ? .green : .secondary)
+                HStack(spacing: 10) {
+                    Image(systemName: store.cloudAccountStatus == .available ? "checkmark.icloud.fill" : "icloud.slash")
+                        .foregroundStyle(store.cloudAccountStatus == .available ? .green : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(settings.jianguoyunConfigured ? "坚果云已配置" : "尚未配置坚果云")
+                            .font(.subheadline.weight(.medium))
+                        Text(store.cloudConnectionMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    if store.syncState == .syncing || store.syncState == .checking { ProgressView() }
+                }
                 if let time = store.lastSyncAt { LabeledContent("最近同步", value: time.formatted(date: .abbreviated, time: .shortened)) }
-                Text(store.lastSyncMessage).font(.footnote).foregroundStyle(.secondary)
-                if store.syncState == .syncing || store.syncState == .checking { ProgressView("正在同步") }
-                Button("检查 WebDAV 配置") { Task { await store.refreshCloudAccountState() } }
-                Button("智能同步") { Task { await store.smartSync() } }
+                DisclosureGroup("配置与诊断", isExpanded: $cloudConfigurationExpanded) {
+                    TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    TextField("坚果云账号", text: $settings.jianguoyunUsername)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("应用密码", text: $settings.jianguoyunAppPassword)
+                    Text("请在坚果云账户安全设置中创建应用密码；应用会在首次推送时创建 SmartLedger 目录。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("检查 WebDAV 连接") { Task { await store.refreshCloudAccountState() } }
+                    Menu("同步操作") {
+                        Button("智能同步") { Task { await store.smartSync() } }
+                        Button("仅推送到坚果云") { Task { await store.pushToCloud() } }
+                        Button("仅从坚果云拉取") { Task { await store.pullFromCloud() } }
+                    }
                     .disabled(!cloudEnabled || !settings.jianguoyunConfigured || store.syncState == .syncing)
-                Button("仅推送到坚果云") { Task { await store.pushToCloud() } }
-                    .disabled(!cloudEnabled || !settings.jianguoyunConfigured || store.syncState == .syncing)
-                Button("仅从坚果云拉取") { Task { await store.pullFromCloud() } }
-                    .disabled(!cloudEnabled || !settings.jianguoyunConfigured || store.syncState == .syncing)
+                }
                 if let conflict = store.pendingSyncConflict {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("检测到同步冲突").font(.headline)
