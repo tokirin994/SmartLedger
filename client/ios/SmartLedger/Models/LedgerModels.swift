@@ -33,7 +33,7 @@ enum DisplayPalette {
         "desktopcomputer", "laptopcomputer", "iphone", "applewatch",
         "banknote.fill", "creditcard.fill", "wallet.pass.fill", "building.columns.fill",
         "briefcase.fill", "shippingbox.fill", "archivebox.fill", "paperplane.fill",
-        "person.2.fill", "figure.2.and.child.holdinghands", "pawprint.fill", "leaf.fill",
+        "person.2.fill", "person.2.fill", "pawprint.fill", "leaf.fill",
         "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill"
     ]
 
