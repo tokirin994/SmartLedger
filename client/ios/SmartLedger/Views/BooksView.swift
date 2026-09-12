@@ -87,11 +87,8 @@ private struct BookRow: View {
                 }
                 Text(book.note?.isEmpty == false ? book.note! : "将相关流水归集在一起")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                HStack(spacing: 8) {
-                    Label("\(book.transactionCount) 笔", systemImage: "list.bullet")
-                    Text(periodText).lineLimit(1)
-                }
-                .font(.caption2).foregroundStyle(.secondary)
+                Label("\(book.transactionCount) 笔流水", systemImage: "list.bullet")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 8)
@@ -106,6 +103,15 @@ private struct BookRow: View {
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            Label(periodText, systemImage: "calendar")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
+                .lineLimit(1)
+                .padding(.leading, 14)
+                .padding(.bottom, 10)
+        }
+        .padding(.bottom, 22)
         .padding(14)
         .background(Color(hex: book.color ?? "#4F46E5").opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(alignment: .leading) { Capsule().fill(Color(hex: book.color ?? "#4F46E5")).frame(width: 4).padding(.vertical, 14) }
@@ -173,15 +179,20 @@ private struct BookDetailView: View {
 private struct BookTransactionSwipeRow: View {
     let transaction: LedgerTransaction
     let onRemove: () -> Void
-    @State private var offset: CGFloat = 0
+    @State private var isActionRevealed = false
+    @GestureState private var dragOffset: CGFloat = 0
 
     private var amountText: String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
     private var amountColor: Color { transaction.kind == .expense ? .primary : .green }
+    private var contentOffset: CGFloat {
+        let base: CGFloat = isActionRevealed ? -96 : 0
+        return min(0, max(-96, base + dragOffset))
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(role: .destructive) {
-                withAnimation(.snappy) { offset = 0 }
+                withAnimation(.snappy) { isActionRevealed = false }
                 onRemove()
             } label: {
                 VStack(spacing: 5) {
@@ -213,15 +224,15 @@ private struct BookTransactionSwipeRow: View {
             .padding(12)
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
-            .offset(x: offset)
+            .offset(x: contentOffset)
             .gesture(
                 DragGesture(minimumDistance: 12)
-                    .onChanged { value in
-                        guard value.translation.width < 0 || offset < 0 else { return }
-                        offset = max(-94, min(0, value.translation.width))
-                    }
+                    .updating($dragOffset) { value, state, _ in state = value.translation.width }
                     .onEnded { value in
-                        withAnimation(.snappy) { offset = value.translation.width < -44 ? -94 : 0 }
+                        withAnimation(.snappy) {
+                            let projected = (isActionRevealed ? -96 : 0) + value.predictedEndTranslation.width
+                            isActionRevealed = projected < -48
+                        }
                     }
             )
         }
@@ -253,6 +264,7 @@ private struct BookEditorView: View {
     @State private var keepExistingCollected = true
     @State private var showDateRangeRequiredAlert = false
     @State private var saveFailureMessage: String?
+    @State private var autoCollectExecutionMessage: String?
     @State private var iconPickerExpanded = false
 
     init(book: LedgerBook?) {
@@ -317,11 +329,6 @@ private struct BookEditorView: View {
                         NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: {
                             LabeledContent("自动归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项")
                         }
-                        Button("调整规则并处理已有流水") {
-                            keepExistingCollected = true
-                            collectUnassignedNow = true
-                            showAutoCollectSetup = true
-                        }
                     }
                 }
                 Section("共同记账成员") {
@@ -334,10 +341,11 @@ private struct BookEditorView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } } } }
             .task { if store.categories.isEmpty { await store.loadCategories() } }
             .sheet(isPresented: $showAutoCollectSetup) {
-                NavigationStack { Form { Section { Text("开启后，新流水会按账本期间和所选类别自动归入本账本，收入和支出都会参与匹配。").foregroundStyle(.secondary) }; Section("归集类别") { NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: { LabeledContent("归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项") } }; Section("已有流水") { Toggle("保留已归集到本账本的流水", isOn: $keepExistingCollected); Toggle("归集此前未归集的全部匹配流水", isOn: $collectUnassignedNow); Text("默认推荐归集此前未关联任何账本的匹配流水；如关闭“保留”，会移除不再符合新规则的现有关联。") .font(.footnote).foregroundStyle(.secondary) } }.navigationTitle("开启自动归集").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAutoCollectSetup = false } }; ToolbarItem(placement: .confirmationAction) { Button("确认开启") { autoCollectEnabled = true; showAutoCollectSetup = false }.buttonStyle(.borderedProminent) } } }
+                NavigationStack { Form { Section { Text("开启后，新流水会按账本期间和所选类别自动归入本账本，收入和支出都会参与匹配。").foregroundStyle(.secondary) }; Section("归集类别") { NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: { LabeledContent("归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项") }; Button(book == nil ? "确认归集分类" : "调整并执行") { Task { await confirmAutoCollectSetup() } }.buttonStyle(.borderedProminent) }; Section("已有流水") { Toggle("保留已归集到本账本的流水", isOn: $keepExistingCollected); Toggle("归集此前未归集的全部匹配流水", isOn: $collectUnassignedNow); Text("默认推荐归集此前未关联任何账本的匹配流水；如关闭“保留”，会移除不再符合新规则的现有关联。") .font(.footnote).foregroundStyle(.secondary) } }.navigationTitle("自动归集规则").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAutoCollectSetup = false } } } }
             }
             .alert("需要先设置账本期间", isPresented: $showDateRangeRequiredAlert) { Button("使用今天作为开始日期") { hasDateRange = true; startDate = Date(); showAutoCollectSetup = true }; Button("暂不开启", role: .cancel) {} } message: { Text("自动归集需要账本开始日期，用于判断哪些流水属于该账本。可以先设置开始日期，结束日期可不填写。") }
             .alert("无法保存账本", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(saveFailureMessage ?? "请检查账本设置后重试。") }
+            .alert("归集规则已执行", isPresented: Binding(get: { autoCollectExecutionMessage != nil }, set: { if !$0 { autoCollectExecutionMessage = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(autoCollectExecutionMessage ?? "已按当前类别和时间范围处理流水。") }
         }
     }
 
@@ -367,12 +375,115 @@ private struct BookEditorView: View {
         if let error = store.errorMessage { saveFailureMessage = error; return }
         dismiss()
     }
+
+    private func confirmAutoCollectSetup() async {
+        autoCollectEnabled = true
+        guard let book else {
+            showAutoCollectSetup = false
+            return
+        }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            saveFailureMessage = "请先填写账本名称，再执行自动归集。"
+            return
+        }
+        if budgetEnabled && (Double(budgetText) == nil || (Double(budgetText) ?? 0) <= 0) {
+            saveFailureMessage = "启用账本预算时，请填写大于 0 的预算金额。"
+            return
+        }
+
+        let draft = BookDraft(name: name.trimmingCharacters(in: .whitespacesAndNewlines), icon: icon.isEmpty ? nil : icon, note: note.isEmpty ? nil : note, color: color.isEmpty ? nil : color, startDate: hasDateRange ? startDate : nil, endDate: hasDateRange && hasEndDate ? endDate : nil, budgetLimitAmount: budgetEnabled ? Double(budgetText) : nil, budgetStartDate: hasDateRange ? startDate : nil, budgetEndDate: hasDateRange && hasEndDate ? endDate : nil, autoCollectEnabled: true, participantNames: members, isPinned: isPinned, autoCollectCategoryIds: Array(selectedCategoryIDs).sorted())
+        store.errorMessage = nil
+        await store.updateBook(book.id, with: draft)
+        if store.errorMessage == nil {
+            await store.applyAutoCollectRules(to: book.id, removeNonMatchingExisting: !keepExistingCollected, collectUnassignedNow: collectUnassignedNow)
+        }
+        if let error = store.errorMessage {
+            saveFailureMessage = error
+        } else {
+            showAutoCollectSetup = false
+            autoCollectExecutionMessage = "已保存归集分类，并按当前规则处理已有流水。"
+        }
+    }
 }
 private struct BookAutoCollectCategoryPicker: View {
     @EnvironmentObject private var store: LedgerStore
     @Binding var selectedIDs: Set<Int>
+    @State private var expandedRootIDs: Set<Int> = []
     private var rootCategories: [LedgerCategory] { store.categories.sorted { $0.name < $1.name } }
-    var body: some View { List { Section { Button("全部收支分类") { selectedIDs.removeAll() }.foregroundStyle(selectedIDs.isEmpty ? .blue : .primary) } header: { Text("不选择类别时，收入和支出都会归集") }; ForEach(rootCategories) { root in Section { Button { toggleRoot(root) } label: { HStack { Image(systemName: root.icon ?? "folder.fill").foregroundStyle(Color(hex: root.color ?? "#4F46E5")); Text(root.name); Spacer(); if selectedIDs.contains(root.id) { Text("包含全部子类").font(.caption).foregroundStyle(.secondary); Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) } } }; if !selectedIDs.contains(root.id) { ForEach(root.children) { child in Button { toggleChild(child) } label: { HStack { Image(systemName: child.icon ?? root.icon ?? "tag").foregroundStyle(Color(hex: child.color ?? root.color ?? "#4F46E5")); Text(child.name); Spacer(); if selectedIDs.contains(child.id) { Image(systemName: "checkmark").foregroundStyle(.blue) } } } } } } header: { Text(root.flowType.title) } } }.navigationTitle("自动归集分类") }
-    private func toggleRoot(_ root: LedgerCategory) { if selectedIDs.contains(root.id) { selectedIDs.remove(root.id) } else { selectedIDs.subtract(root.flattened().map(\.id)); selectedIDs.insert(root.id) } }
-    private func toggleChild(_ child: LedgerCategory) { if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) } }
+    var body: some View {
+        List {
+            Section {
+                Button("全部收支分类") { selectedIDs.removeAll() }
+                    .foregroundStyle(selectedIDs.isEmpty ? .blue : .primary)
+            } header: {
+                Text("不选择类别时，收入和支出都会归集")
+            }
+
+            ForEach(FlowType.allCases) { flowType in
+                Section(flowType.title) {
+                    ForEach(rootCategories.filter { $0.flowType == flowType }) { root in
+                        if root.children.isEmpty {
+                            rootRow(root)
+                        } else {
+                            DisclosureGroup(isExpanded: expandedBinding(for: root.id)) {
+                                ForEach(root.children) { child in
+                                    childRow(child, root: root)
+                                }
+                            } label: {
+                                rootRow(root)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("自动归集分类")
+    }
+
+    private func expandedBinding(for id: Int) -> Binding<Bool> {
+        Binding(get: { expandedRootIDs.contains(id) }, set: { expanded in
+            if expanded { expandedRootIDs.insert(id) } else { expandedRootIDs.remove(id) }
+        })
+    }
+
+    private func rootRow(_ root: LedgerCategory) -> some View {
+        Button { toggleRoot(root) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: root.icon ?? "folder.fill").foregroundStyle(Color(hex: root.color ?? "#4F46E5"))
+                Text(root.name).foregroundStyle(.primary)
+                Spacer()
+                if selectedIDs.contains(root.id) {
+                    Text(root.children.isEmpty ? "已选" : "包含子类").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func childRow(_ child: LedgerCategory, root: LedgerCategory) -> some View {
+        Button { toggleChild(child) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: child.icon ?? root.icon ?? "tag").foregroundStyle(Color(hex: child.color ?? root.color ?? "#4F46E5"))
+                Text(child.name).foregroundStyle(.primary)
+                Spacer()
+                if selectedIDs.contains(child.id) { Image(systemName: "checkmark").foregroundStyle(.blue) }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleRoot(_ root: LedgerCategory) {
+        if selectedIDs.contains(root.id) {
+            selectedIDs.remove(root.id)
+        } else {
+            selectedIDs.subtract(root.flattened().map(\.id))
+            selectedIDs.insert(root.id)
+            expandedRootIDs.remove(root.id)
+        }
+    }
+
+    private func toggleChild(_ child: LedgerCategory) {
+        if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
+    }
 }
