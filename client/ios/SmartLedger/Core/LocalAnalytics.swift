@@ -131,6 +131,10 @@ enum LocalAnalytics {
       let category = categories.first(where: { $0.id == categoryId }) ?? rootCategory
 
       let path = category.pathComponents
+      // `categories` is a flattened tree. Restrict the detailed chart to the
+      // selected root; otherwise every category's second path component (for
+      // example another root's “零食”) is accidentally rendered here.
+      guard path.first == rootCategory.name else { continue }
       guard path.count >= 2 else { continue }
 
       let childName = path.count == 2 ? path[1] : (hasChildren ? "未分类" : rootCategory.name)

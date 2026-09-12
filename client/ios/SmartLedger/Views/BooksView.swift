@@ -65,25 +65,52 @@ struct BooksView: View {
 }
 private struct BookRow: View {
     let book: LedgerBook
+
+    private var periodText: String {
+        guard let start = book.startDate else { return "未限定期间" }
+        let startText = start.formatted(date: .abbreviated, time: .omitted)
+        return book.endDate.map { "\(startText) - \($0.formatted(date: .abbreviated, time: .omitted))" } ?? "自 \(startText) 起"
+    }
+
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: book.icon ?? "book.closed.fill")
-                .font(.title3.weight(.semibold)).foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
-                .frame(width: 44, height: 44)
-                .background(Color(hex: book.color ?? "#4F46E5").opacity(0.13), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            VStack(alignment: .leading, spacing: 4) {
-                HStack { Text(book.name).font(.headline); if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) } }
-                Text(book.note ?? "未填写说明").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                HStack(spacing: 8) { Label("\(book.transactionCount)", systemImage: "list.bullet"); Text("净额 \(book.balance.cnyText)") }
-                    .font(.caption2).foregroundStyle(.secondary)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
+                .frame(width: 46, height: 46)
+                .background(Color(hex: book.color ?? "#4F46E5").opacity(0.14), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Text(book.name).font(.headline)
+                    if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
+                }
+                Text(book.note?.isEmpty == false ? book.note! : "将相关流水归集在一起")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 8) {
+                    Label("\(book.transactionCount) 笔", systemImage: "list.bullet")
+                    Text(periodText).lineLimit(1)
+                }
+                .font(.caption2).foregroundStyle(.secondary)
             }
-            Spacer()
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 5) {
+                Text("净额").font(.caption2).foregroundStyle(.secondary)
+                Text(book.balance.cnyText)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(book.balance < 0 ? .red : .blue)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text("支 \(book.expenseAmount.cnyText) · 收 \(book.incomeAmount.cnyText)")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
         }
-        .padding(12)
-        .background(Color(hex: book.color ?? "#4F46E5").opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color(hex: book.color ?? "#4F46E5").opacity(0.14), lineWidth: 1) }
-        .padding(.vertical, 3)
+        .padding(14)
+        .background(Color(hex: book.color ?? "#4F46E5").opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(alignment: .leading) { Capsule().fill(Color(hex: book.color ?? "#4F46E5")).frame(width: 4).padding(.vertical, 14) }
+        .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color(hex: book.color ?? "#4F46E5").opacity(0.14), lineWidth: 1) }
+        .padding(.vertical, 4)
     }
 }
 
@@ -121,9 +148,85 @@ private struct BookDetailView: View {
 
     private var budgetCard: some View { let limit = current.budgetLimitAmount ?? 0; let remaining = limit - current.expenseAmount; return VStack(alignment: .leading, spacing: 12) { Text("账本预算").font(.title3.bold()); HStack(spacing: 10) { metric("预算", limit.cnyText, .blue); metric("已用", current.expenseAmount.cnyText, .orange); metric("剩余", remaining.cnyText, remaining < 0 ? .red : .green) }; ProgressView(value: min(max(current.expenseAmount / max(limit, 1), 0), 1)).tint(remaining < 0 ? .red : .blue); Text("预算周期：\(periodText)").font(.caption).foregroundStyle(.secondary) }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
     private var splitCard: some View { VStack(alignment: .leading, spacing: 14) { Text("最终分账").font(.title3.bold()); ForEach(current.participants) { member in let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }; let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }; let net = paid - owed; VStack(alignment: .leading, spacing: 8) { HStack { Text(member.name).font(.headline); Spacer(); Text(net >= 0 ? "应收 \(net.cnyText)" : "应付 \((-net).cnyText)").foregroundStyle(net >= 0 ? .green : .orange) }; HStack(spacing: 10) { metric("已支付", paid.cnyText, .blue); metric("应承担", owed.cnyText, .purple) } } } }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
-    private var transactionsCard: some View { VStack(alignment: .leading, spacing: 10) { HStack { Text("归集流水").font(.title3.bold()); Spacer(); Text("\(relatedTransactions.count) 笔").font(.caption).foregroundStyle(.secondary) }; if relatedTransactions.isEmpty { ContentUnavailableView("暂无归集流水", systemImage: "tray") }; ForEach(relatedTransactions) { tx in HStack(spacing: 12) { Image(systemName: tx.kind == .expense ? "arrow.up.right.circle.fill" : "arrow.down.left.circle.fill").font(.title3).foregroundStyle(tx.kind == .expense ? .orange : .green).frame(width: 30); VStack(alignment: .leading, spacing: 4) { Text(tx.title).font(.subheadline.weight(.semibold)); HStack(spacing: 6) { Text(tx.categoryName ?? "未分类"); Text("·"); Text(tx.happenedAt.formatted(date: .abbreviated, time: .shortened)) }.font(.caption).foregroundStyle(.secondary) }; Spacer(); VStack(alignment: .trailing, spacing: 6) { Text(transactionAmountText(tx)).font(.subheadline.weight(.bold)).foregroundStyle(transactionAmountColor(tx)); Button { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("取消关联", systemImage: "link.badge.minus") .font(.caption2.weight(.medium)) }.buttonStyle(.borderless).foregroundStyle(.red) } }.padding(12).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous)).overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }.contextMenu { Button(role: .destructive) { Task { await store.removeTransaction(tx.id, from: current.id) } } label: { Label("从账本剔除", systemImage: "minus.circle") } } } } }
+    private var transactionsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("归集流水").font(.title3.bold())
+                Spacer()
+                Text("左滑可取消关联").font(.caption2).foregroundStyle(.secondary)
+                Text("\(relatedTransactions.count) 笔").font(.caption).foregroundStyle(.secondary)
+            }
+            if relatedTransactions.isEmpty {
+                ContentUnavailableView("暂无归集流水", systemImage: "tray")
+            }
+            ForEach(relatedTransactions) { transaction in
+                BookTransactionSwipeRow(transaction: transaction) {
+                    Task { await store.removeTransaction(transaction.id, from: current.id) }
+                }
+            }
+        }
+    }
     private var periodText: String { guard let start = current.startDate else { return "未限定" }; let begin = start.formatted(date: .abbreviated, time: .omitted); return current.endDate.map { "\(begin) - \($0.formatted(date: .abbreviated, time: .omitted))" } ?? "自 \(begin) 起" }
     private func metric(_ title: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 5) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.subheadline.bold()).foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.65) }.frame(maxWidth: .infinity, minHeight: 62, alignment: .leading).padding(10).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12)) }
+}
+
+private struct BookTransactionSwipeRow: View {
+    let transaction: LedgerTransaction
+    let onRemove: () -> Void
+    @State private var offset: CGFloat = 0
+
+    private var amountText: String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
+    private var amountColor: Color { transaction.kind == .expense ? .primary : .green }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(role: .destructive) {
+                withAnimation(.snappy) { offset = 0 }
+                onRemove()
+            } label: {
+                VStack(spacing: 5) {
+                    Image(systemName: "link.badge.minus")
+                    Text("取消关联").font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(width: 94)
+                .frame(maxHeight: .infinity)
+                .background(.red, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 12) {
+                Image(systemName: transaction.kind == .expense ? "arrow.up.right.circle.fill" : "arrow.down.left.circle.fill")
+                    .font(.title3).foregroundStyle(transaction.kind == .expense ? .orange : .green).frame(width: 30)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(transaction.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(transaction.categoryName ?? "未分类")
+                        Text("·")
+                        Text(transaction.happenedAt.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Text(amountText).font(.subheadline.weight(.bold)).foregroundStyle(amountColor)
+            }
+            .padding(12)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+            .offset(x: offset)
+            .gesture(
+                DragGesture(minimumDistance: 12)
+                    .onChanged { value in
+                        guard value.translation.width < 0 || offset < 0 else { return }
+                        offset = max(-94, min(0, value.translation.width))
+                    }
+                    .onEnded { value in
+                        withAnimation(.snappy) { offset = value.translation.width < -44 ? -94 : 0 }
+                    }
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
 }
 
 private struct BookEditorView: View {
