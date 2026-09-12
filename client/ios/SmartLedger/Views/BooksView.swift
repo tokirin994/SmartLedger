@@ -73,45 +73,44 @@ private struct BookRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: book.icon ?? "book.closed.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
-                .frame(width: 46, height: 46)
-                .background(Color(hex: book.color ?? "#4F46E5").opacity(0.14), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: book.icon ?? "book.closed.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
+                    .frame(width: 46, height: 46)
+                    .background(Color(hex: book.color ?? "#4F46E5").opacity(0.14), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Text(book.name).font(.headline)
-                    if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Text(book.name).font(.headline)
+                        if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
+                    }
+                    Text(book.note?.isEmpty == false ? book.note! : "将相关流水归集在一起")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Label("\(book.transactionCount) 笔流水", systemImage: "list.bullet")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-                Text(book.note?.isEmpty == false ? book.note! : "将相关流水归集在一起")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Label("\(book.transactionCount) 笔流水", systemImage: "list.bullet")
-                    .font(.caption2).foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text("净额").font(.caption2).foregroundStyle(.secondary)
+                    Text(book.balance.cnyText)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(book.balance < 0 ? .red : .blue)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    Text("支 \(book.expenseAmount.cnyText) · 收 \(book.incomeAmount.cnyText)")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
 
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 5) {
-                Text("净额").font(.caption2).foregroundStyle(.secondary)
-                Text(book.balance.cnyText)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(book.balance < 0 ? .red : .blue)
-                    .lineLimit(1).minimumScaleFactor(0.7)
-                Text("支 \(book.expenseAmount.cnyText) · 收 \(book.incomeAmount.cnyText)")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-        }
-        .overlay(alignment: .bottomLeading) {
+            Divider().opacity(0.45)
             Label(periodText, systemImage: "calendar")
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
                 .lineLimit(1)
-                .padding(.leading, 14)
-                .padding(.bottom, 10)
         }
-        .padding(.bottom, 22)
         .padding(14)
         .background(Color(hex: book.color ?? "#4F46E5").opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(alignment: .leading) { Capsule().fill(Color(hex: book.color ?? "#4F46E5")).frame(width: 4).padding(.vertical, 14) }
@@ -222,6 +221,7 @@ private struct BookTransactionSwipeRow: View {
                 Text(amountText).font(.subheadline.weight(.bold)).foregroundStyle(amountColor)
             }
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
             .offset(x: contentOffset)
@@ -236,6 +236,7 @@ private struct BookTransactionSwipeRow: View {
                     }
             )
         }
+        .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
@@ -326,9 +327,10 @@ private struct BookEditorView: View {
                     }))
                     if autoCollectEnabled {
                         Text("匹配账本时间范围内的收入与支出流水；未选分类表示全部收支分类。") .font(.caption).foregroundStyle(.secondary)
-                        NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: {
+                        Button { showAutoCollectSetup = true } label: {
                             LabeledContent("自动归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项")
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 Section("共同记账成员") {
@@ -341,7 +343,7 @@ private struct BookEditorView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } } } }
             .task { if store.categories.isEmpty { await store.loadCategories() } }
             .sheet(isPresented: $showAutoCollectSetup) {
-                NavigationStack { Form { Section { Text("开启后，新流水会按账本期间和所选类别自动归入本账本，收入和支出都会参与匹配。").foregroundStyle(.secondary) }; Section("归集类别") { NavigationLink { BookAutoCollectCategoryPicker(selectedIDs: $selectedCategoryIDs).environmentObject(store) } label: { LabeledContent("归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项") }; Button(book == nil ? "确认归集分类" : "调整并执行") { Task { await confirmAutoCollectSetup() } }.buttonStyle(.borderedProminent) }; Section("已有流水") { Toggle("保留已归集到本账本的流水", isOn: $keepExistingCollected); Toggle("归集此前未归集的全部匹配流水", isOn: $collectUnassignedNow); Text("默认推荐归集此前未关联任何账本的匹配流水；如关闭“保留”，会移除不再符合新规则的现有关联。") .font(.footnote).foregroundStyle(.secondary) } }.navigationTitle("自动归集规则").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAutoCollectSetup = false } } } }
+                NavigationStack { Form { Section { Text("选择归集分类后，在右上角保存并确认是否处理已有流水。未保存直接返回不会修改当前规则。").foregroundStyle(.secondary) }; Section("归集类别") { NavigationLink { BookAutoCollectCategoryPicker(initialSelectedIDs: selectedCategoryIDs) { ids, keepExisting, collectUnassigned in selectedCategoryIDs = ids; keepExistingCollected = keepExisting; collectUnassignedNow = collectUnassigned; Task { await confirmAutoCollectSetup() } }.environmentObject(store) } label: { LabeledContent("归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项") } } }.navigationTitle("自动归集规则").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAutoCollectSetup = false } } } }
             }
             .alert("需要先设置账本期间", isPresented: $showDateRangeRequiredAlert) { Button("使用今天作为开始日期") { hasDateRange = true; startDate = Date(); showAutoCollectSetup = true }; Button("暂不开启", role: .cancel) {} } message: { Text("自动归集需要账本开始日期，用于判断哪些流水属于该账本。可以先设置开始日期，结束日期可不填写。") }
             .alert("无法保存账本", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(saveFailureMessage ?? "请检查账本设置后重试。") }
@@ -407,9 +409,24 @@ private struct BookEditorView: View {
 }
 private struct BookAutoCollectCategoryPicker: View {
     @EnvironmentObject private var store: LedgerStore
-    @Binding var selectedIDs: Set<Int>
+    @Environment(\.dismiss) private var dismiss
+    let onCommit: (Set<Int>, Bool, Bool) -> Void
+    @State private var selectedIDs: Set<Int>
     @State private var expandedRootIDs: Set<Int> = []
+    @State private var flowFilter: AutoCollectFlowFilter = .all
+    @State private var showingExecutionConfirmation = false
+    @State private var keepExistingCollected = true
+    @State private var collectUnassignedNow = true
+
+    init(initialSelectedIDs: Set<Int>, onCommit: @escaping (Set<Int>, Bool, Bool) -> Void) {
+        self.onCommit = onCommit
+        _selectedIDs = State(initialValue: initialSelectedIDs)
+    }
+
     private var rootCategories: [LedgerCategory] { store.categories.sorted { $0.name < $1.name } }
+    private var displayedRoots: [LedgerCategory] {
+        rootCategories.filter { flowFilter == .all || $0.flowType == flowFilter.flowType }
+    }
     var body: some View {
         List {
             Section {
@@ -419,25 +436,60 @@ private struct BookAutoCollectCategoryPicker: View {
                 Text("不选择类别时，收入和支出都会归集")
             }
 
-            ForEach(FlowType.allCases) { flowType in
-                Section(flowType.title) {
-                    ForEach(rootCategories.filter { $0.flowType == flowType }) { root in
-                        if root.children.isEmpty {
-                            rootRow(root)
-                        } else {
-                            DisclosureGroup(isExpanded: expandedBinding(for: root.id)) {
-                                ForEach(root.children) { child in
-                                    childRow(child, root: root)
-                                }
-                            } label: {
-                                rootRow(root)
+            Section {
+                Picker("收支类型", selection: $flowFilter) {
+                    ForEach(AutoCollectFlowFilter.allCases) { filter in Text(filter.title).tag(filter) }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section(flowFilter == .all ? "全部分类" : flowFilter.title) {
+                ForEach(displayedRoots) { root in
+                    if root.children.isEmpty {
+                        rootRow(root)
+                    } else {
+                        DisclosureGroup(isExpanded: expandedBinding(for: root.id)) {
+                            ForEach(root.children) { child in
+                                childRow(child, root: root)
                             }
+                        } label: {
+                            rootRow(root)
                         }
                     }
                 }
             }
         }
         .navigationTitle("自动归集分类")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) { Button("保存") { showingExecutionConfirmation = true } }
+        }
+        .sheet(isPresented: $showingExecutionConfirmation) {
+            NavigationStack {
+                Form {
+                    Section("已有流水") {
+                        Toggle("保留已归集到本账本的流水", isOn: $keepExistingCollected)
+                        Toggle("归集此前未归集的全部匹配流水", isOn: $collectUnassignedNow)
+                        Text("默认会补充此前未关联任何账本的匹配流水；关闭“保留”会移除不再符合规则的现有关联。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .navigationTitle("确认并执行")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("返回修改") { showingExecutionConfirmation = false } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("调整并执行") {
+                            onCommit(selectedIDs, keepExistingCollected, collectUnassignedNow)
+                            showingExecutionConfirmation = false
+                            dismiss()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
     }
 
     private func expandedBinding(for id: Int) -> Binding<Bool> {
@@ -487,3 +539,22 @@ private struct BookAutoCollectCategoryPicker: View {
         if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
     }
 }
+
+private enum AutoCollectFlowFilter: String, CaseIterable, Identifiable {
+    case all, expense, income
+    var id: String { rawValue }
+    var title: String { self == .all ? "全部" : (self == .expense ? "支出" : "收入") }
+    var flowType: FlowType? { self == .expense ? .expense : (self == .income ? .income : nil) }
+}
+/*
+        selectedIDs.subtract(root.flattened().map(\.id))
+            selectedIDs.insert(root.id)
+            expandedRootIDs.remove(root.id)
+        }
+    }
+
+    private func toggleChild(_ child: LedgerCategory) {
+        if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
+    }
+}
+*/
