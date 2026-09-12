@@ -65,6 +65,24 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(iCloudPreferred, forKey: Self.iCloudPreferredKey) }
     }
 
+    @Published var jianguoyunEndpoint: String {
+        didSet { UserDefaults.standard.set(jianguoyunEndpoint, forKey: Self.jianguoyunEndpointKey) }
+    }
+
+    @Published var jianguoyunUsername: String {
+        didSet { UserDefaults.standard.set(jianguoyunUsername, forKey: Self.jianguoyunUsernameKey) }
+    }
+
+    @Published var jianguoyunAppPassword: String {
+        didSet { UserDefaults.standard.set(jianguoyunAppPassword, forKey: Self.jianguoyunPasswordKey) }
+    }
+
+    var jianguoyunConfigured: Bool {
+        !jianguoyunEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !jianguoyunUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !jianguoyunAppPassword.isEmpty
+    }
+
     @Published private(set) var paymentChannels: [String] {
         didSet { UserDefaults.standard.set(paymentChannels, forKey: Self.paymentChannelsKey) }
     }
@@ -101,6 +119,9 @@ final class AppSettings: ObservableObject {
     }
 
     private static let iCloudPreferredKey = "smartledgerlocal.icloudPreferred"
+    private static let jianguoyunEndpointKey = "smartledger.jianguoyun.endpoint"
+    private static let jianguoyunUsernameKey = "smartledger.jianguoyun.username"
+    private static let jianguoyunPasswordKey = "smartledger.jianguoyun.password"
     private static let paymentChannelsKey = "smartledgerlocal.paymentChannels"
     private static let bookAssignmentPromptEnabledKey = "smartledgerlocal.bookAssignmentPromptEnabled"
     private static let appearanceModeKey = "smartledgerlocal.appearanceMode"
@@ -120,7 +141,10 @@ final class AppSettings: ObservableObject {
     ]
 
     init() {
-        self.iCloudPreferred = UserDefaults.standard.object(forKey: Self.iCloudPreferredKey) as? Bool ?? true
+        self.iCloudPreferred = UserDefaults.standard.object(forKey: Self.iCloudPreferredKey) as? Bool ?? false
+        self.jianguoyunEndpoint = UserDefaults.standard.string(forKey: Self.jianguoyunEndpointKey) ?? "https://dav.jianguoyun.com/dav/SmartLedger/ledger-snapshot.json"
+        self.jianguoyunUsername = UserDefaults.standard.string(forKey: Self.jianguoyunUsernameKey) ?? ""
+        self.jianguoyunAppPassword = UserDefaults.standard.string(forKey: Self.jianguoyunPasswordKey) ?? ""
         self.bookAssignmentPromptEnabled = UserDefaults.standard.object(forKey: Self.bookAssignmentPromptEnabledKey) as? Bool ?? true
         self.appearanceMode = AppAppearanceMode(rawValue: UserDefaults.standard.string(forKey: Self.appearanceModeKey) ?? "system") ?? .system
 

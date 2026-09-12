@@ -10,6 +10,7 @@ struct DashboardView: View {
 @State private var showRangeSheet = false
 @State private var distributionMode: DistributionChartMode = .pie
 @State private var selectedDistributionRootId: Int?
+@State private var isCustomRangeActive = false
 
 var body: some View {
     NavigationStack {
@@ -49,12 +50,13 @@ var body: some View {
                 selectedPreset: $preset,
                 onSelectPreset: { selected in
                     preset = selected
+                    isCustomRangeActive = false
                     Task { await reload() }
                 },
-                onSelectPinnedRange: { range in
+                onSelectPinnedRange: { range, dimension in
+                    isCustomRangeActive = true
                     Task {
-                        await store.refreshDashboard(customRange: range, granularity: granularity(for: range))
-                        await reload()
+                        await store.refreshDashboard(customRange: range, granularity: dimension)
                     }
                 }
             )
@@ -97,7 +99,7 @@ private var filterSection: some View {
                     }
                     .buttonStyle(.plain)
 
-                    Label(preset.defaultGranularity.title + "维度", systemImage: "chart.bar.xaxis")
+                    Label(activeDimension.title + "维度", systemImage: "chart.bar.xaxis")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -116,6 +118,7 @@ private var filterSection: some View {
                     ForEach(OverviewPreset.allCases) { item in
                         Button {
                             preset = item
+                            isCustomRangeActive = false
                             Task { await reload() }
                         } label: {
                             Text(item.title)
@@ -381,7 +384,7 @@ private var summaryGrid: some View {
 
     private var currentWindowTransactions: [LedgerTransaction] {
         let window: DateWindow
-        if store.activeRangePreset == preset.dateRangePreset {
+        if !isCustomRangeActive {
             window = preset.dateRangePreset.resolve()
         } else {
             window = store.activeCustomRange.resolvedWindow
@@ -558,6 +561,10 @@ private var summaryGrid: some View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var activeDimension: Granularity {
+        isCustomRangeActive ? store.activeGranularity : preset.defaultGranularity
     }
 
     private var remainingBudget: Double {
@@ -1127,12 +1134,13 @@ private enum OverviewPreset: String, CaseIterable, Identifiable {
    @Environment(\.dismiss) private var dismiss
 @Binding var selectedPreset: OverviewPreset
 let onSelectPreset: (OverviewPreset) -> Void
-let onSelectPinnedRange: (CustomDateRange) -> Void
+let onSelectPinnedRange: (CustomDateRange, Granularity) -> Void
 
 @State private var customStartDate: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
 @State private var customEndDate: Date = Date()
 @State private var pinTitle: String = ""
 @State private var showPinComposer = false
+@State private var customGranularity: Granularity = .day
 
 var body: some View {
     NavigationStack {
@@ -1161,7 +1169,7 @@ var body: some View {
                 Section("已置顶时间范围") {
                     ForEach(settings.pinnedDashboardRanges) { item in
                         Button {
-                            onSelectPinnedRange(item.range)
+                            onSelectPinnedRange(item.range, customGranularity)
                             dismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1195,9 +1203,14 @@ var body: some View {
             Section("自定义范围") {
                 DatePicker("开始", selection: $customStartDate, displayedComponents: .date)
                 DatePicker("结束", selection: $customEndDate, in: customStartDate..., displayedComponents: .date)
-                
+                Picker("自定义维度", selection: $customGranularity) {
+                    ForEach(Granularity.allCases) { dimension in
+                        Text(dimension.title + "维度").tag(dimension)
+                    }
+                }
+
                 Button {
-                    onSelectPinnedRange(currentCustomRange)
+                    onSelectPinnedRange(currentCustomRange, customGranularity)
                     dismiss()
                 } label: {
                     HStack {
@@ -1238,6 +1251,7 @@ var body: some View {
         .onAppear {
             customStartDate = store.activeCustomRange.start
             customEndDate = store.activeCustomRange.end
+            customGranularity = store.activeGranularity
         }
     }
 }

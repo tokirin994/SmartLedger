@@ -1,0 +1,1206 @@
+# Ledger iOS：账本 / 流水 / 设置 详细实现规格书 (给 AI Coding 用)
+> 文档目的: 这不是简单的产品说明，而是一份**可直接指导另一个 AI 或开发者继续编码**的实现级规格说明。
+> 范围只覆盖以下三个核心域，并要求写清楚“用什么交互容器实现”：
+> 1. 账本页面、账本设置、归集功能
+> 2. 流水页、流水新增/编辑、分类/账本归属交互
+> 3. 设置页内容、交互、同步、主题、支付渠道
+> 目标：让另一个 AI 在不看历史对话的情况下，也能较高一致性地继续开发当前项目。
+
+---
+
+# 1．当前工程基准
+## 1.1 项目定位
+这是一个 **iOS 原生 SwiftUI 记账 App**，当前工程名已经统一为 **Ledger**。
+核心设计思想：
+- **本地优先**：本地单机即可完整使用
+- **Apple 原生优先**：SwiftUI + PhotosUI + Vision + AuthenticationServices + CloudKit
+- **无需自建后端**：不依赖自部署服务器
+- **支持专题账本**：普通流水之外，还支持主题账本归集
+- **支持 OCR 导入**：从支付截图识别金额、标题、支付渠道、时间、分类建议
+
+## 1.2 当前主要文件对应关系
+AI 编码时优先参考这些文件：
+- 入口：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/LedgerApp.swift`
+- 账本页：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Views/BooksView.swift`
+- 流水页：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Views/TransactionsView.swift`
+- 新增/编辑流水：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Views/CreateTransactionView.swift`
+- 设置页：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Views/SettingsView.swift`
+- 分类 / 分类编辑：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Views/CategoriesView.swift`
+- 状态中心：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Core/LedgerStore.swift`
+- 设置状态：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Core/AppSettings.swift`
+- 数据模型：`/Users/tok/c/SmartLedgerLocal/client/ios/Ledger/Models/LedgerModels.swift`
+
+# 2．全局导航与交互总原则
+## 2.1 底部 Tab 结构
+底部导航固定为 5 个 Tab：
+1. 概览
+2. 账本
+3. 流水
+4. 识图
+5. 更多
+
+“更多”内再进入：
+- 预算
+- 分类
+- 设置
+
+## 2.2 每个 Tab 要单独维护 NavigationStack
+要求：
+- 每个 Tab 都用自己独立的 `NavigationStack`
+- 当用户重新点某个 Tab，应该尽量回到该 Tab 的最外层
+- 当前项目通过 `Notification.Name.ledgerResetTabRoot` + reset token 完成
+
+实现参考：
+- `LedgerApp.swift`
+- `RootTabView`
+- 各页面中的 `.onReceive(NotificationCenter.default.publisher(for: .ledgerResetTabRoot))`
+
+## 2.3 弹层类型使用规则
+### 2.3A 保存退出提示（必须单独实现）
+这是一个强制要求，不能省略。
+凡是用户会编辑表单内容的页面，只要存在尚未保存的改动，在用户尝试离开当前页面时，都必须弹出“保存退出提示”。
+
+适用页面至少包括：
+- 新建账本
+- 编辑账本（账本设置）
+- 新建流水
+- 编辑流水
+- 未来若新增预算编辑、分类编辑、OCR 结果确认编辑页，也应复用同一套机制
+
+触发时机包括：
+1. 点击左上角"取消"
+2. 用手势下拉关闭 sheet
+3. 切换页面导致当前编辑页即将被销毁
+4. 未来若改为 push 页面，则点击返回时同样要拦截
+
+交互式要求：
+- 不要直接丢数据
+- 使用 `confirmationDialog` 或等价的原生确认交互
+- 文案要明确说明"改动还未保存"
+
+标准选项必须固定为：
+- 保存
+- 丢弃更改
+- 继续编辑
+
+标准行为：
+- 选择"保存"：先执行保存逻辑，保存成功后再退出
+- 选择"丢弃更改"：直接退出，不保存
+- 选择"继续编辑"：关闭提示，留在当前页
+
+实现建议：
+- sheet 页面统一用 `SheetDismissGuard` 拦截手势关闭
+- 表单页维护一个 `hasUnsavedChanges` / dirty state
+- dirty state 建议基于"进入页面时快照 vs 当前表单状态"比较
+
+这条规则要单独写给 AI，因为它不是 UI 装饰，而是防止误操作的数据保护功能。
+必须严格区分：
+
+### 用 `sheet`
+适合：
+- 新建/编辑表单
+- 快速修改分类
+- 快速修改账本归属
+- 支付渠道选择器
+- 自动归集开启确认面板
+- 分享系统面板
+
+### 用 `NavigationLink`
+适合：
+- 进入账本详情
+- 进入分类层级选择下一层
+- 进入账本归属选择页
+- 进入自动归集分类选择页
+- 进入设置二级内容
+
+### 用 `alert`
+适合：
+- 删除确认
+- 全局错误提示
+- 明确的危险操作提醒
+
+### 用 `confirmationDialog`
+适合：
+- 用户编辑中退出但尚未保存
+- 需要给“保存 / 丢弃 / 继续编辑”三选一
+
+### 用 `popover`
+适合：
+- 流水卡片上多个账本的简要小窗查看
+- 小范围、轻量信息补充
+
+---
+
+# 3．数据模型约束（必须遵守）
+## 3.1 LedgerBook（账本）
+字段要点：
+- `id`
+- `name`
+- `icon`
+- `color`
+- `note`
+- `startDate`
+- `endDate`
+- `autoCollectEnabled`
+- `budgetLimitAmount`
+- `budgetStartDate`
+- `budgetEndDate`
+- `expenseAmount`
+- `incomeAmount`
+- `balance`
+- `transactionCount`
+- `participantNames`
+- `isPinned`
+- `autoCollectCategoryIds`
+
+规则：
+- `participantNames.count > 1` 视为多人分开账开启状态
+- 账本预算与账本时间范围一致，不单独配置另一套时间交互
+- `autoCollectCategoryIds` 为空时表示"全部分类都可自动归集"
+
+## 3.2 LedgerTransaction（流水）
+字段要点：
+- `title`
+- `amount`
+- `kind`（收入 / 支出）
+- `happenedAt`
+- `categoryId`
+- `categoryName`
+- `merchant`
+- `paymentMethod`
+- `note`
+- `source`（manual / ocr）
+- `bookId`
+- `bookName`
+- `bookIds`
+- `bookNames`
+- `installmentGroupId`
+- `installmentIndex`
+- `installmentMonths`
+- `installmentOriginalTotal`
+- `paidByParticipantId`
+- `paidByParticipantName`
+- `splitParticipantIds`
+- `splitParticipantNames`
+
+规则：
+- 一条流水**可以归属多个账本**，以 `bookIds/bookNames` 为准
+- `bookId/bookName` 是"主账本"兼容字段，通常取 `bookIds.first`
+- OCR 导入只是来源之一，不可跳过用户确认强制记账（单条导入时必须确认）
+- 分期是存储层拆单，而不是仅 UI 标签
+
+## 3.3 分类模型 LedgerCategory
+必须支持：
+- 多级树结构
+- 父节点可直接选为类别
+- 子节点也可选为类别
+- 统计、筛选、自动归集都要支持"父节点包含所有后代"的匹配逻辑
+
+---
+
+# 4．账本模块：页面结构与交互规格
+## 4.1 账本列表页（BooksView）
+### 4.1.1 页面结构
+列表页从上到下：
+#### A．顶部汇总区
+是一个 `Section`，包含 3 张统计卡：
+- 账本数
+- 主题支出
+- 主题收入
+
+展示形式：
+- 横向 3 卡片
+- 使用玻璃卡片风格 `glassCard`
+
+#### B．搜索框
+搜索框为**常驻显示**，不额外放放大镜按钮作为入口。
+UI 结构：
+- 左侧放大镜 icon
+- 中间 `TextField("搜索账本标题")`
+- 右侧当有文字时显示清空按钮
+
+搜索范围：
+- 账本名称
+- 账本说明 `note`
+
+#### C．账本卡片列表
+每个账本卡片要展示：
+- 图标（圆形背景）
+- 名称
+- 说明（可选）
+- 是否置顶图标
+- 笔数 tag
+- 支出 tag
+- 收入 tag（若 > 0）
+- 净额
+- 时间范围
+
+### 4.1.2 排序规则
+账本列表排序：
+1. 先按 `isPinned`，置顶的在前
+2. 再按 `startDate` 倒序
+3. 再按 `id` 倒序
+
+### 4.1.3 左滑 / 右滑动作
+当前实现是 **trailing swipeActions**，包含：
+- 置顶 / 取消置顶
+- 删除
+
+要求：
+- 不允许全滑直接删除，`allowsFullSwipe: false`
+- 删除必须再弹 `alert` 确认
+
+### 4.1.4 工具栏按钮
+右上角两个按钮：
+- 刷新按钮：重新 `loadBooks()`
+- 加号按钮：打开新建账本 `sheet`
+
+### 4.1.5 空状态
+当列表为空时：
+- 用 `ContentUnavailableView`
+- 文案区分：
+  - 无搜索词：`暂无主题账本`
+  - 有搜索词：`没有匹配的账本`
+
+---
+
+## 4.2 新建 / 编辑账本页（CreateBookView）
+这是一个**表单 sheet**，不是 push 页面。
+交互容器：
+- `sheet`
+- 内部自己包一层 `NavigationStack`
+- 顶部按钮：取消 / 保存
+- 未保存退出：`confirmationDialog`
+- 开启自动归集额外确认：`sheet(AutoCollectSetupSheet)`
+
+### 4.2.1 页面标题
+- 新建时：`新建账本`
+- 编辑时：`账本设置`
+
+### 4.2.2 Section 划分
+#### Section 1: 基础信息
+包含：
+1. `TextField("账本名称")`
+2. 图标选择区
+3. 颜色选择区
+4. 说明文本框
+
+##### 图标选择区要求
+- 默认收起，不要一开始把全部 icon 铺满
+- 顶部是一行预览条目：
+  - 左侧当前图标预览
+  - 中间标题"图标"
+  - 下方显示 icon 名称或提示文案
+  - 右侧 chevron 展开/收起
+- 点开后才展示 `LazyVGrid` 图标库
+- 图标库使用 `DisplayPalette.icons`
+
+##### 颜色选择区要求
+- 显示当前色块预览
+- 使用 `DisplayPalette.colors`
+- 颜色是直接点选，不允许要求用户手输 hex
+
+##### 说明文案
+当前有一条辅助文案：
+- “上面两个分别是：账本显示图标和主题颜色。只影响界面展示，不影响记账逻辑。”
+如果未来要做极简模式可删，但当前产品逻辑允许保留。
+
+#### Section 2：时间范围
+包含：
+1. 开始时间 `DatePicker`
+2. `Toggle("设置结束时间")`
+3. 若开启，则展示结束时间 `DatePicker`
+4. `Toggle("自动归集范围内流水")`
+5. 若自动归集已开启，显示自动归集说明 + 自动归集分类入口
+
+##### 时间规则
+- `startDate` 必填
+- `endDate` 可选
+- 若无结束时间，则为开放区间
+
+##### 自动归集开关规则
+不能直接打开。
+当用户第一次从关闭切到开启时：
+- 不直接生效
+- 先打开一个 **sheet 弹层**：`AutoCollectSetupSheet`
+
+弹层内必须有：
+- 标题：`开启自动归集`
+- 一段说明文案，文案依赖设置页里“是否开启归属提示”
+- 一个勾选开关：`保存后主动归集一次已有流水`
+- 两个并排按钮：`取消` / `开启`
+
+行为：
+- 点取消：不启用自动归集
+- 点开启：`autoCollectEnabled = true`
+- 若勾选了“主动归集一次已有流水”，则保存账本后调用批量归集逻辑
+
+#### Section 3：自动归集分类
+仅在 `autoCollectEnabled == true` 时显示。
+
+入口形式：
+- `NavigationLink`
+- 进入 `BookAutoCollectCategoryPickerView`
+
+主页面这一行展示：
+- 左边：`自动归集分类`
+- 右边：
+  - 未选任何分类：`全部分类`
+  - 已选若干分类：拼接名称摘要
+
+##### 分类选择规则
+这是一个**push 页面**，不是 sheet。
+页面内规则：
+第一项固定是“全部分类”
+- 点中后清空 `selectedCategoryIds`
+- 下方展示支出分类
+- 只做支出分类自动归集，不处理收入分类自动归集
+- 若选中某父节点，则其子节点不再单独显示在可见列表中
+- 若选择某分类时，它的后代和祖先都要互斥去重
+
+也就是说：
+- 选了父类，就不必再选子类
+- 选了子类，再选父类时，子类应被清掉
+- 这是为了避免重复匹配和 UI 混乱
+
+#### Section 4：账本预算
+包含：
+- `Toggle("启用账本预算")`
+- 若开启，则显示 `TextField("预算金额")`
+- 下方提示：预算周期自动与账本时间一致
+
+规则：
+- 账本预算不再单独让用户设置另一套起止时间
+- `budgetStartDate = startDate`
+- `budgetEndDate = endDate`（若有）
+
+#### Section 5：多人分账
+包含：
+- `Toggle("启用多人分账")`
+- 若开启：
+  - 新增成员输入框
+  - 右侧加号按钮
+  - 成员列表（每行可编辑名称 + 删除）
+  - 一个“恢复默认成员（我）”按钮
+
+规则：
+- 默认关闭
+- 默认成员初始值为 `["我"]`
+- 开启后若没有有效成员，不允许保存
+- 成员名称要去重、去空格、过滤空字符串
+
+### 4.2.3 保存规则
+点击右上角“保存”时：
+- 组装 `BookDraft`
+- 编辑模式：调用 `store.updateBook(id, with: draft)`
+- 新建模式：调用 `store.createBook(draft)`
+- 如果 `collectExistingNow == true`：
+  - 再调用 `store.collectTransactionsIntoBook(targetBookId)`
+- 成功后关闭 sheet
+
+### 4.2.4 未保存退出 / 保存后再退出
+这是很关键的交互，也是必须写进 AI 实现要求的内容。
+
+要求：
+- 用户点左上角“取消”时，如果有未保存修改，不允许直接关闭
+- 用户下拉 sheet 尝试关闭时，如果有未保存修改，也不能直接关闭
+
+实现方式：
+- 用 `SheetDismissGuard`
+- 用 `confirmationDialog("改动还未保存")`
+选项必须是：
+- 保存
+- 丢弃更改
+- 继续编辑
+
+---
+
+## 4.3 账本详情页（BookDetailView）
+进入方式：
+- 从账本列表卡片点击 `NavigationLink`
+
+交互容器：
+- 主体是 push 页面
+- 编辑设置：`sheet(CreateBookView(editingBook: book))`
+- 分享导出后：系统分享 `sheet(ActivityViewController)`
+- 删除账本：`alert`
+
+### 4.3.1 页面结构
+#### Section A：账本头部摘要
+展示：
+- 标题
+- 说明
+- 支出 / 收入 / 净额三张指标卡
+- 若多人分账开启，则展示成员 chips 横向滚动区
+
+#### Section B：账本预算
+仅在账本启用预算时显示。
+
+展示：
+- 预算
+- 已用
+- 剩余
+- `ProgressView`
+- 预算区间文字
+
+#### Section C：最终分账
+只有在这个账本下存在带分账数据的流水时显示。
+
+每个成员展示：
+- 成员名
+- 已支付
+- 应承担
+- 净额（应收 / 应付 / 已平）
+
+计算规则：
+- 仅统计这个账本下的支出流水
+- `paidByParticipantId` 累加到已支付
+- `splitParticipantIds` 均摊到应承担
+
+#### Section D：归集流水
+展示所有归属到该账本的流水。
+
+每条流水展示：
+- 分类 + icon
+- 金额
+- 标题
+- 时间
+- 如有分账信息则显示付款人、分账成员
+
+每条流水的 trailing swipe action：
+- `删除`
+
+注意：
+- “剔除”不是删除流水
+- 只是调用 `store.removeTransaction(tx.id, from: book.id)`
+
+#### 4.3.2 右上角设置菜单
+是一个 `Menu`，不是直接打开设置页。
+
+菜单项包括：
+1. 设置
+2. 置顶 / 取消置顶
+3. 导出分享（子菜单）
+4. 删除账本
+
+##### 设置
+- 打开 `sheet(CreateBookView(editingBook: book))`
+
+##### 置顶
+- 直接调用 `store.setBookPinned(book.id, pinned: !book.isPinned)`
+
+##### 导出分享
+子菜单里包含：
+- 导出 HTML
+- 导出 Markdown
+- 导出 PDF
+
+生成后使用系统分享面板 `UIActivityViewController`
+
+##### 删除账本
+- 必须弹 `alert`
+- 文案需明确：
+  - 删除账本不会删除流水，只移除关联
+
+---
+
+## 4.4 账本自动归集：业务规则
+### 4.4.1 自动归集中条件
+一笔流水中某账本自动归集，必须同时满足：
+1. 该账本 `autoCollectEnabled == true`
+2. 流水时间落在账本时间范围内
+3. 若账本设置了 `autoCollectCategoryIds`，则流水分类必须命中该分类集合
+
+### 4.4.2 分类命中规则
+- 若账本未配置任何自动归集分类，则视为全部分类都可归集
+- 若选择的是父节点，则其全部后代分类也算命中
+- 这一点必须走路径前缀匹配，不可只做 id 相等
+
+### 4.4.3 推荐与自动加入的区别
+#### 情况 A：设置里开启了“新流水显示账本归属推荐”
+则：
+- 新建流水页中显示“符合这些账本时间范围 / 可补充关联到这些账本”的推荐区
+- 由用户手动点“添加”
+- 保存时不会再自动偷偷加入未选账本
+
+#### 情况 B：设置里关闭了“新流水显示账本归属推荐”
+则：
+- 用户保存流水前不弹推荐
+- 保存时系统把命中的自动归集账本直接加入 `draft.bookIds`
+
+### 4.4.4 一条流水可归属多个账本
+必须支持。
+不能因为符合多个账本条件却只推荐一个。
+
+实现上：
+- `LedgerStore.resolveBooksForTransactionDraft(_:)` 返回数组
+- 最终写入 `bookIds / bookNames`
+
+### 4.4.5 批量归集已有流水
+仅在用户开启自动归集时，由确认 sheet 的勾选决定是否执行。
+不是账本列表里常驻按钮，不做单独“批量关联”入口。
+
+# 5．流水模块：页面结构与交互规格
+## 5.1 流水列表页（TransactionsView）
+页面标题：`流水`
+
+交互容器：
+- 主体：`NavigationStack`
+- 新建流水：`sheet(CreateTransactionView)`
+- 编辑流水：`sheet(CreateTransactionView(editingTransaction: tx))`
+- 快速改分类：`sheet(QuickCategoryAssignSheet)`
+- 快速改账本：`sheet(QuickBookAssignSheet)`
+- 删除确认：`alert`
+- 多账本展示：`popover`
+
+### 5.1.1 页面上方固定筛选区
+通过 `.safeAreaInset(edge: .top)` 固定在列表上方。
+内容从上到下：
+
+#### A．流向筛选条
+三项：
+- 全部
+- 支出
+- 收入
+
+样式：
+- 胶囊按钮组
+- 当前选中项填充高亮色
+
+#### B．时间范围 + 分类筛选卡
+这一整块是玻璃卡片。
+
+第一行：
+- 左边：时间范围 `Menu`
+- 右边：分类 `Menu`
+
+时间范围可选：
+- 近 7 天
+- 近 30 天
+- 本月
+- 本年
+- 自定义
+
+分类菜单可选：
+- 全部分类
+- 所有当前 flowType 对应分类
+
+第二行：
+- 展示时间跨度摘要
+- 右侧有“重置”按钮（仅当条件被修改）
+
+#### C．自定义日期条
+只在时间范围选到“自定义”时显示。
+
+包含：
+- 开始 `DatePicker`
+- 结束 `DatePicker`
+
+### 5.1.2 列表内容结构
+列表按**天**分组展示。
+每个 Section header 显示：
+- 日期胶囊
+- 当天净额胶囊
+
+顶部还有一个 summaryHeader：
+- 收入
+- 支出
+- 净额
+
+### 5.1.3 流水卡片展示字段
+每条流水卡片需要展示：
+#### 第一行
+- 左侧图标圆形徽标
+- 标题
+- 右侧金额
+
+#### 第二行 tag 区（横向可滚）
+包含：
+- 分类 tag
+- 多账本 tag（只显示 books 图标 + `…`）
+- OCR tag（当 `source == "ocr"`）
+- 分期 tag（当 `installmentMonths != nil`）
+
+#### 多账本 tag 规则
+- 不直接把多个账本名字铺在卡片上
+- 统一显示一个小 tag: `books.vertical + …`
+- 点击后用 `popover` 展示完整账本名称列表
+
+#### 第三行元信息
+- 日期时间（胶囊）
+- 商户（如果有）
+
+#### 第四行支付渠道
+如果 `paymentMethod` 有值，单独一行显示支付渠道 tag
+
+#### 第五行优惠/溢价指标
+若任一字段存在则显示：
+- 原价
+- 优惠
+- 溢价
+
+### 5.1.4 流水左滑 / 右滑操作
+当前实现是 trailing swipe actions：
+- 删除
+- 账本
+- 分类
+
+说明：
+#### 删除
+- 打开 `alert`
+- 文案：删除后不可恢复
+
+#### 账本
+- 打开 `sheet(QuickBookAssignSheet)`
+- 用于快速勾选 / 取消勾选账本归属
+
+#### 分类
+- 打开 `sheet(QuickCategoryAssignSheet)`
+- 用于快速重选分类
+
+---
+## 5.2 快速改分类（QuickCategoryAssignSheet）
+交互容器：`sheet`
+
+内部使用：
+- `NavigationStack`
+- 顶部：取消 / 保存
+
+页面结构：
+- 顶部单独一个“未分类”按钮
+- 下方 Section("分类")
+- 用 `ExpandableCategoryRow` 做层级展开
+
+规则：
+- 有子节点的分类可被直接选中
+- 也可继续展开选更细分类
+- 点击保存后调用 `store.updateTransaction(transaction.id, with: draft)`
+
+---
+## 5.3 快速改账本（QuickBookAssignSheet）
+交互容器：`sheet`
+
+内部：
+- `NavigationStack`
+- 顶部只有"关闭"按钮
+
+页面结构：
+- 一个 Section: `全部账本`
+- 所有账本都列出来
+- 点击即切换勾选状态
+
+规则：
+- 已勾选则取消关联：`store.removeTransaction`
+- 未勾选则新增关联：`store.assignTransaction`
+- 不分"已关联区 / 未关联区"，统一列表中切换
+- 修改后要立即有勾选反馈
+
+---
+## 5.4 新建 / 编辑流水页（CreateTransactionView）
+交互容器：
+- `sheet`
+- 内部包 `NavigationStack`
+- 顶部：取消 / 保存
+- 未保存退出：`confirmationDialog`
+
+页面标题：
+- 新建时：`新增流水`
+- 编辑时：`修改流水`
+
+### 5.4.1 Section 1: 基础信息
+包含：
+1. 类型 Picker（收入 / 支出）
+2. 标题 TextField
+3. 金额 TextField
+4. 支付渠道选择器 `PaymentChannelField`
+5. 时间 DatePicker
+
+规则：
+- 标题不能为空
+- 金额必须能转成 `Double`
+
+### 5.4.2 Section 2: 分类与账本归属
+#### 分类入口
+必须是一个按钮行，不直接把整个分类树铺在当前页。
+
+点击后：
+- `sheet(showCategoryPicker)`
+- 打开 `CategoryRootPickerSheet`
+
+用户流程要求：
+1. 先看到一级分类列表
+2. 若该分类无子节点：点一下直接选中并退出
+3. 若该分类有子节点：进入下一层页面或展开选择
+4. 当前大类本身也允许直接选中
+5. 不要用层层弹 sheet 的方式反复套层
+
+当前实现是：
+- 根层 `sheet + NavigationStack`
+- 一级分类页 `CategoryRootPickerSheet`
+- 进入大类后 `ExpandableCategorySelectionSheet`
+- 更深层使用 `DisclosureGroup` 展开
+
+#### 在创建流水时新增分类
+分类选择器中要支持：
+- 在当前层级新增分类
+
+实现方式：
+- 关闭分类选择 sheet
+- 再打开 `sheet(CategoryEditorSheet)`
+- `preselectedFlowType = 当前流水类型`
+- `preselectedParentId = 当前正在新增的父节点`
+- 新增成功后自动回填 `draft.categoryId`
+
+#### 账本归属入口
+形式：
+- `NavigationLink`
+- 进入 `TransactionBooksPickerView`
+
+行为：
+- 展示全部账本
+- 点击切换勾选
+- 一条流水可勾选多个账本
+- 返回后主页面右侧显示已选账本名称拼接文本
+
+### 5.4.3 推荐账本区
+仅在以下条件同时满足时显示：
+- `settings.bookAssignmentPromptEnabled == true`
+- `suggestedBooks` 非空
+
+位置：
+- 放在分类/账本归属 Section 内
+
+展示文案：
+- 新建时：`符合这些账本时间范围`
+- 编辑时：`可补充关联到这些账本`
+
+每条推荐行：
+- 左侧紫色提示 icon
+- 中间账本名
+- 右侧若未选则显示"添加"，已选则显示勾
+
+重要规则：
+- 新建和编辑都可以显示推荐
+- 但不能一进入新增页面就强行弹窗
+- 只能做页面内轻量推荐
+
+### 5.4.4 多人分账 Section
+仅在 `selectedBook?.splitEnabled == true` 时显示。
+
+内容：
+- 付款人 Picker
+- 分账成员 Toggle 列表
+
+规则：
+- 付款人从选中的“主账本”的 participants 来
+- 分账成员也是该账本 participants
+- 若该账本开启多人分账：
+  - 付款人不能为空
+  - 至少选择 1 位分账成员
+  - 否则保存时报错
+
+### 5.4.5 分期 Section
+内容：
+- `Toggle("启用分期")`
+- 若开启：
+  - `Stepper("分期月数")`
+  - 起始月份 `DatePicker`
+
+规则：
+- 默认关闭
+- 关闭时 `installmentMonths` 重置为 1
+- 保存时由 Store 拆单
+
+### 5.4.6 高级字段 Section
+包含：
+- 商户
+- 备注
+- 原价
+- 优惠金额
+- 溢价金额
+
+注意：
+- 商户不放在基础信息里，放高级字段
+- 支付渠道放基础信息里
+
+### 5.4.7 保存逻辑
+#### 新建流水
+- 若支付渠道不为空，先 `settings.registerPaymentChannel(...)`
+- 如果设置里关闭了"账本归属推荐提示"，则保存前自动把命中的自动归集账本补到 `draft.bookIds`
+- 调用 `store.createTransaction(draft)`
+
+#### 编辑流水
+- 若支付渠道不为空，同样注册到支付渠道配置
+- 不自动追加推荐账本，只保留用户已选内容
+- 调用 `store.updateTransaction(id, with: draft)`
+
+### 5.4.8 未保存退出 / 保存后再退出
+必须支持，而且要和账本设置页保持同一套交互语义：
+- 点取消时检查 dirty state
+- 下拉关闭 sheet 时检查 dirty state
+- 弹出 `confirmationDialog`
+
+选项：
+- 保存
+- 丢弃更改
+- 继续编辑
+
+---
+## 5.5 支付渠道选择器（PaymentChannelField / PaymentChannelPickerSheet）
+交互容器：
+- 入口是当前表单中的一行按钮
+- 点击后打开 `sheet`
+- sheet 内部包 `NavigationStack`
+
+页面内容：
+- 若当前已选中某渠道，顶部提供“清空”
+- 下方 Section("常用渠道")
+- 支持 `searchable`
+- 当搜索词不在现有渠道中时，底部出现: `新增"xxx"`
+
+规则：
+- 选择已有渠道：立即写回并关闭 sheet
+- 新增渠道：注册后立即写回并关闭
+- 同名大小写/空格视为相同渠道
+
+---
+# 6．设置模块：页面结构与交互规格
+## 6.1 设置页总结构（SettingsView）
+设置页从`更多`Tab push 进入。
+
+交互容器：
+- `NavigationStack`
+- 主体是 `Form`
+- 新增支付渠道：`sheet`
+- 全局错误提示：`alert`
+
+Section 固定顺序：
+1. 外观
+2. Apple 账号
+3. iCloud / CloudKit 云同步
+4. 支付渠道
+5. 账本归属
+6. 开发辅助
+
+---
+## 6.2 外观 Section
+### 6.2.1 主题模式
+用 `Picker`
+
+选项：
+- 跟随系统
+- 白天
+- 夜间
+
+映射到：
+- `AppAppearanceMode.system`
+- `AppAppearanceMode.light`
+- `AppAppearanceMode.dark`
+
+### 6.2.2 背景图片
+展示：
+- 一行状态说明：已设置 / 默认
+- 若已有背景图，展示预览图
+- 下方按钮区：
+  - 选择背景 / 更换背景 (PhotosPicker)
+  - 清除（只有存在背景图时显示）
+
+行为：
+- 选择图片后压缩并保存到 Application Support 目录
+- 清除时删除本地背景图片文件
+
+注意视觉：
+- 页面其余卡片/组件需尽量使用玻璃材质感，不要大块死白底挡住背景
+- 背景图上文本可读性优先
+
+---
+
+## 6.3 Apple 账号 Section
+### 已登录状态
+显示：
+- 账号（优先 fullName，其次 email，其次 userIdentifier）
+- 邮箱（若有）
+- 绑定时间
+- 一个危险按钮：`清除本地 Apple 账号信息`
+
+### 未登录状态
+显示：
+- `SignInWithAppleButton(.continue)`
+
+行为：
+- 请求 `.fullName`、`.email`
+- 回调给 `store.handleAppleSignIn(result)`
+
+---
+
+## 6.4 iCloud / CloudKit 云同步 Section
+### 6.4.1 展示项
+包括：
+- 启用云同步 Toggle
+- iCloud 状态
+- 同步状态
+- CloudKit 用户 recordName（若存在）
+- 最近同步时间
+- 最近同步消息
+
+### 6.4.2 进行中状态
+当 `syncState == .syncing || .checking` 时：
+- 显示 `ProgressView`
+- 配合说明文案
+
+### 6.4.3 操作按钮
+依次包括：
+1. 刷新 iCloud 状态
+2. 智能同步（本地 / iCloud 对比）
+3. 仅推送到 iCloud
+4. 仅从 iCloud 拉取
+
+禁用规则：
+- 正在同步时禁用
+- 云同步关闭时禁用推送/拉取/智能同步
+
+### 6.4.4 冲突处理 UI
+若存在 `pendingSyncConflict`，要在该 Section 内直接显示冲突卡片，不额外弹窗。
+
+内容：
+- 本地更新时间、流水数、账本数
+- 云端更新时间、流水数、账本数
+- 两个按钮：
+  - 保留本地
+  - 采用云端
+
+交互类型：
+- 直接是内嵌按钮，不是 sheet，不是 alert
+
+规则：
+- 让用户清楚知道冲突发生了什么
+- 用户做完选择后，清空冲突状态
+
+---
+
+## 6.5 支付渠道 Section
+### 展示逻辑
+#### 无支付渠道时
+- 显示 `暂无`
+
+#### 有支付渠道时
+逐行展示每个渠道：
+- 左侧 label + credit card icon
+- 右滑删除
+
+最后再放一行：
+- `新增支付渠道`
+- 点击打开 `sheet(PaymentChannelSuggestionPickerSheet)`
+
+### PaymentChannelSuggestionPickerSheet 规则
+交互容器：
+- `sheet`
+- 内部 `NavigationStack`
+- 顶部“取消”按钮
+
+页面内容：
+- Section("常见类型")
+- 展示推荐渠道列表
+- 点击即回调 `onSelect(channel)` 并关闭
+
+推荐渠道来自：
+- `settings.suggestedPaymentChannels`
+
+要求：
+- 已有渠道不重复展示
+- 渠道是配置项，新增后会进入后续流水表单选择器中
+
+---
+
+## 6.6 账本归属 Section
+只有一个核心配置：
+- `Toggle("新流水显示账本归属推荐")`
+
+下方解释文案：
+> 关闭后，如果某个账本已开启自动归集，落在其时间范围内的新流水会直接归入该账本，不再额外提醒。
+
+业务含义：
+- 这是“推荐 vs 自动加入”的全局总开关
+- 对新建流水生效
+- 当前实现中，编辑流水只显示推荐，不自动偷偷追加
+
+---
+
+## 6.6A 设置页中的保存退出提示要求
+当前设置页本身大部分是即时生效，因此不需要整页“保存”按钮。
+但如果未来在"设置"内新增下列页面，请一律套用同一套"保存退出提示"机制：
+- 独立的预算编辑页
+- 独立的分类编辑页
+- 独立的同步配置表单页
+- 复杂 OCR 修正表单页
+
+也就是说：
+- 即时生效型设置：可以不弹保存退出提示
+- 表单聚合型设置：必须支持"保存 / 丢弃 / 继续编辑"
+
+这样可以避免后续扩展时，同一个 App 里出现两套完全不同的退出逻辑。
+
+---
+
+## 6.7 开发辅助 Section
+只有一个按钮：
+- `生成一批模拟数据`
+
+行为：
+- 调用 `store.appendExtendedDemoData()`
+- 正在加载或同步中禁用
+
+目的：
+- 快速生成可用于图表、账本、分账、预算、OCR 验证的样本数据
+
+---
+
+# 7．Store 层必须提供的方法与职责
+另一个 AI 如果要继续做，不要把页面自己写成数据孤岛，必须继续走 `LedgerStore`。
+
+## 7.1 账本相关方法
+必须保留 / 延续这些职责：
+- `createBook(_:)`
+- `updateBook(_:with:)`
+- `deleteBook(_:)`
+- `setBookPinned(_:pinned:)`
+- `collectTransactionsIntoBook(_:)`
+- `shouldAutoCollect(into:date:categoryId:)`
+- `recommendedBooks(for:)`
+- `matchesAutoCollectCategory(book:transactionCategoryId:)`
+
+### 账本删除规则
+删除账本时：
+- 删掉账本本身
+- 删掉名称关联的预算（当前实现如此）
+- 遍历所有流水，移除该账本 id/name
+- 不删除流水
+
+## 7.2 流水相关方法
+必须保留 / 延续：
+- `createTransaction(_:)`
+- `updateTransaction(_:with:)`
+- `deleteTransaction(_:)`
+- `assignTransaction(_:to:)`
+- `removeTransaction(_:from:)`
+
+### 创建流水时的关键规则
+- 先校验标题和金额
+- 若账本开启分账：
+  - 至少 1 个分账成员
+  - 必须选付款人
+- 若启用分期：按月拆分多条流水
+- 账本支持多选，多账本结果写入 `bookIds/bookNames`
+
+### 编辑流水时的关键规则
+- 编辑是单条更新，不重新拆分期组
+- 保留原有分期组元信息
+- 更新账本数组、分类、支付渠道、分账信息
+
+## 7.3 设置 / 云同步方法
+必须保留 / 延续：
+- `handleAppleSignIn(_:)`
+- `clearAppleProfile()`
+- `refreshCloudAccountState()`
+- `smartSync()`
+- `pushToCloud()`
+- `pullFromCloud()`
+- `setCloudSyncEnabled(_:)`
+- `useLocalForSyncConflict()`
+- `useRemoteForSyncConflict()`
+
+---
+
+# 8．用户体验细节要求（必须遵守）
+## 8.1 不要把所有可选项直接铺满页面
+例如：
+- 图标库默认折叠
+- 分类树不要默认平铺在新增流水页
+- 支付渠道用二级选择 sheet
+- 自动归集分类用 push 页面
+
+## 8.2 危险操作一定要二次确认
+包括：
+- 删除账本：`alert`
+- 删除流水：`alert`
+- 关闭未保存表单：`confirmationDialog`
+- 开启自动归集：先 `sheet` 确认再保存
+
+## 8.3 表单退出防丢失
+以下页面都必须做未保存保护：
+- 新建/编辑账本
+- 新建/编辑流水
+
+方式统一：
+- 左上取消时检查 dirty
+- 手勢下拉关闭时检查 dirty
+- 用 `SheetDismissGuard`
+
+## 8.4 一切“推荐”都做轻量展示，不做强打断弹窗
+包括：
+- 新流水推荐关联账本
+- 编辑流水推荐补充关联账本
+
+不能：
+- 一进入页面就弹 modal 强制问
+
+## 8.5 多账本显示要克制
+不要在流水卡片上直接显示一长串账本名字。
+
+正确做法：
+- 卡片里只显示 `...` 小 tag
+- 点击后 `popover` 看详情
+
+---
+
+# 9．验收清单（AI 编码完成后必须自检）
+## 9.1 账本模块
+- [ ] 账本列表支持搜索
+- [ ] 新建/编辑账本未保存退出时，必须提示"保存 / 丢弃 / 继续编辑"
+- [ ] 账本支持左滑置顶 / 删除
+- [ ] 新建账本是 sheet，不是 push
+- [ ] 编辑账本也是 sheet
+- [ ] 开启自动归集会先出现确认 sheet
+- [ ] 确认 sheet 内有"保存后主动归集一次已有流水"开关
+- [ ] 自动归集分类是 push 选择页，不是直接一大坨复选框
+- [ ] 自动归集分类支持父类包含子类
+- [ ] 账本预算随账本时间，不单独预设预算时间
+- [ ] 多人分账默认关闭，开启后可配置成员
+- [ ] 账本详情中可剔除流水但不删除流水本身
+- [ ] 账本详情可导出 HTML / MD / PDF
+- [ ] 删除账本前有 alert
+
+## 9.2 流水模块
+- [ ] 流水页顶部筛选固定显示
+- [ ] 新建/编辑流水未保存退出时，必须提示"保存 / 丢弃 / 继续编辑"
+- [ ] 支持收入 / 支出 / 全部筛选
+- [ ] 支持时间范围筛选和分类筛选
+- [ ] 自定义时间时显示开始/结束 DatePicker
+- [ ] 流水按天分组
+- [ ] 点击流水打开编辑 sheet
+- [ ] 左滑/右滑支持删除、改账本、改分类
+- [ ] 快速改分类是 sheet
+- [ ] 快速改账本是 sheet
+- [ ] 新建流水时分类选择先选一级，再展开/进入子级
+- [ ] 父分类可以直接作为流水类别
+- [ ] 支付渠道在基础信息里
+- [ ] 商户在高级字段里
+- [ ] 分期默认关闭
+- [ ] 新建流水支持推荐账本但不弹窗打断
+- [ ] 一条流水可以关联多个账本
+- [ ] 多账本卡片只显示 `...`，点击 popover 查看
+- [ ] 编辑/新建流水未保存退出时有 confirmationDialog
+
+## 9.3 设置模块
+- [ ] 即时生效型设置不需要整页保存
+- [ ] 未来新增复杂设置表单时，必须有"保存 / 丢弃 / 继续编辑"退出提示
+- [ ] 有主题模式设置
+- [ ] 有背景图设置与清除
+- [ ] 有 Apple 登录区
+- [ ] 有云同步区与状态显示
+- [ ] 有冲突选择 UI，不是黑盒自动覆盖
+- [ ] 有支付渠道配置区
+- [ ] 支付渠道新增通过 sheet
+- [ ] 有"新流水显示账本归属推荐"总开关
+- [ ] 有开发辅助生成模拟数据按钮
+
