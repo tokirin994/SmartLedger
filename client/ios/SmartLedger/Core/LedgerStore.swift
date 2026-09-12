@@ -891,8 +891,8 @@ final class LedgerStore: ObservableObject {
 
     private func installSupplementalDefaultSubcategoriesIfNeeded() -> Bool {
         let versionKey = "smartledgerlocal.defaultCategoryCatalogVersion"
-        guard UserDefaults.standard.integer(forKey: versionKey) < 2 else { return false }
-        defer { UserDefaults.standard.set(2, forKey: versionKey) }
+        guard UserDefaults.standard.integer(forKey: versionKey) < 4 else { return false }
+        defer { UserDefaults.standard.set(4, forKey: versionKey) }
 
         var inserted = false
         for (rootName, childNames) in DemoData.supplementalDefaultSubcategories {
@@ -906,7 +906,7 @@ final class LedgerStore: ObservableObject {
                     id: nextCategoryId,
                     name: childName,
                     flowType: root.flowType,
-                    icon: root.icon,
+                    icon: DemoData.categoryIcon(for: childName, fallback: root.icon ?? "tag.fill"),
                     color: root.color,
                     parentId: root.id,
                     level: root.level + 1,
