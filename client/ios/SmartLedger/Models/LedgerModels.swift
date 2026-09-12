@@ -1,7 +1,9 @@
 import Foundation
+import SwiftUI
 
 enum FlowType: String, Codable, CaseIterable, Identifiable, Sendable {
     case expense, income
+    var id: String { rawValue }
     var title: String {
         switch self {
         case .expense:
@@ -225,6 +227,11 @@ struct LedgerTransaction: Codable, Identifiable, Hashable, Sendable {
     let paidByParticipantName: String?
     let splitParticipantIds: [String]
     let splitParticipantNames: [String]
+    var installmentOriginalTotal: Double? = nil
+    var originalAmount: Double? = nil
+    var discountAmount: Double? = nil
+    var premiumAmount: Double? = nil
+    var installmentStartMonth: Date? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, title, amount, kind, note, merchant, source, currency
@@ -243,6 +250,11 @@ struct LedgerTransaction: Codable, Identifiable, Hashable, Sendable {
         case paidByParticipantName = "paid_by_participant_name"
         case splitParticipantIds = "split_participant_ids"
         case splitParticipantNames = "split_participant_names"
+        case installmentOriginalTotal = "installment_original_total"
+        case originalAmount = "original_amount"
+        case discountAmount = "discount_amount"
+        case premiumAmount = "premium_amount"
+        case installmentStartMonth = "installment_start_month"
     }
 }
 
@@ -260,29 +272,30 @@ struct DistributionPoint: Codable, Identifiable, Sendable {
     let amount: Double
     let ratio: Double
     let color: String?
+    var id: String { category }
 }
 
 enum BudgetPeriod: String, Codable, CaseIterable, Identifiable {
     case monthly
-    var id: String { category }
+    var id: String { rawValue }
 }
 
 struct BudgetItem: Codable, Identifiable, Hashable {
     let id: Int
     let name: String
     let limitAmount: Double
-    let period: BudgetPeriod
+    let periodType: String
     let categoryId: Int?
     let categoryName: String?
     let year: Int
-    let month: Int
+    let month: Int?
     let startDate: Date?
     let endDate: Date?
     let spentAmount: Double
     let usageRatio: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, name, limitAmount, period, categoryId, startDate, endDate, spentAmount, usageRatio
+        case id, name, limitAmount, categoryId, startDate, endDate, spentAmount, usageRatio
         case periodType = "period_type"
         case categoryName = "category_name"
         case year, month
@@ -351,16 +364,29 @@ struct LedgerBook: Codable, Identifiable, Sendable {
     }
 }
 
+// Compatibility initializers keep the existing store code source-compatible while
+// persisted models use their newer field order.
+extension LedgerTransaction {
+    init(id: Int, title: String, amount: Double, kind: FlowType, happenedAt: Date, note: String?, merchant: String?, paymentMethod: String?, source: String, currency: String, categoryId: Int?, categoryName: String?, bookId: Int?, bookName: String?, bookIds: [Int], bookNames: [String], installmentGroupId: String?, installmentIndex: Int?, installmentMonths: Int?, installmentOriginalTotal: Double?, originalAmount: Double?, discountAmount: Double?, premiumAmount: Double?, paidByParticipantId: String?, paidByParticipantName: String?, splitParticipantIds: [String], splitParticipantNames: [String]) {
+        self.init(id: id, title: title, amount: amount, kind: kind, happenedAt: happenedAt, note: note, merchant: merchant, paymentMethod: paymentMethod, source: source, currency: currency, categoryId: categoryId, categoryName: categoryName, bookId: bookId, bookName: bookName, bookIds: bookIds, bookNames: bookNames, installmentGroupId: installmentGroupId, installmentIndex: installmentIndex, installmentMonths: installmentMonths, paidByParticipantId: paidByParticipantId, paidByParticipantName: paidByParticipantName, splitParticipantIds: splitParticipantIds, splitParticipantNames: splitParticipantNames, installmentOriginalTotal: installmentOriginalTotal, originalAmount: originalAmount, discountAmount: discountAmount, premiumAmount: premiumAmount, installmentStartMonth: nil)
+    }
+}
+
+extension LedgerBook {
+    init(id: Int, name: String, icon: String?, color: String?, note: String?, startDate: Date?, endDate: Date?, autoCollectEnabled: Bool, budgetLimitAmount: Double?, budgetStartDate: Date?, budgetEndDate: Date?, expenseAmount: Double, incomeAmount: Double, balance: Double, transactionCount: Int, participantNames: [String], isPinned: Bool, autoCollectCategoryIds: [Int]) {
+        self.init(id: id, name: name, icon: icon, color: color, note: note, startDate: startDate, endDate: endDate, budgetLimitAmount: budgetLimitAmount, budgetStartDate: budgetStartDate, budgetEndDate: budgetEndDate, autoCollectEnabled: autoCollectEnabled, expenseAmount: expenseAmount, incomeAmount: incomeAmount, balance: balance, transactionCount: transactionCount, participantNames: participantNames, isPinned: isPinned, autoCollectCategoryIds: autoCollectCategoryIds)
+    }
+}
+
+extension BudgetItem {
+    init(id: Int, name: String, limitAmount: Double, periodType: String, year: Int, month: Int?, startDate: Date?, endDate: Date?, categoryId: Int?, categoryName: String?, spentAmount: Double, usageRatio: Double) {
+        self.init(id: id, name: name, limitAmount: limitAmount, periodType: periodType, categoryId: categoryId, categoryName: categoryName, year: year, month: month, startDate: startDate, endDate: endDate, spentAmount: spentAmount, usageRatio: usageRatio)
+    }
+}
+
 struct BookParticipant: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
-}
-
-struct AppleAccountProfile: Codable {
-    init(id: String = UUID().uuidString, name: String) {
-        self.id = id
-        self.name = name
-    }
 }
 
 enum CloudSyncState: String { case disabled, idle, syncing, success, unavailable, conflict, failed
@@ -393,40 +419,42 @@ struct AnalyticsOverview: Codable, Sendable {
     let budgets: [BudgetItem]
 }
 
-struct PersistedLedgerSnapshot: Codable {
-    var categories: [LedgerCategory]
-    var books: [LedgerBook]
-    var transactions: [LedgerTransaction]
-    var budgets: [BudgetItem]
-    enum CodingKeys: String, CodingKey {
-        case categories, books, transactions, budgets
-        case startDate = "start_date"
-        case endDate = "end_date"
-        case start, end, balance, distribution, trend
-        case totalIncome = "total_income"
-        case totalExpense = "total_expense"
-    }
-}
-
 extension Color {
     init(hex: String) {
-        let v = UInt64(hex.dropFirst(), radix: 16) ?? 0
-        let r: CGFloat = CGFloat((v & 0xFF0000) >> 16) / 255
-        let g: CGFloat = CGFloat((v & 0x00FF00) >> 8) / 255
-        let b: CGFloat = CGFloat(v & 0x0000FF) / 255
-        let a: CGFloat = hex.count > 7 ? CGFloat((v & 0xFF000000) >> 24) / 255 : 1
-        self.init(.sRGB, red: r, green: g, blue: b, opacity: a)
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: cleaned).scanHexInt64(&int)
+
+        let a, r, g, b: UInt64
+        switch cleaned.count {
+        case 3:
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8:
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 24, 144, 255)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
     }
 }
 
 extension Color {
     init?(hexString: String) {
-        let v = UInt64(hex.dropFirst(), radix: 16) ?? 0
-        guard v != 0 || hex.lowercased() == "#000000" else { return nil }
+        let v = UInt64(hexString.dropFirst(), radix: 16) ?? 0
+        guard v != 0 || hexString.lowercased() == "#000000" else { return nil }
         let r: CGFloat = CGFloat((v & 0xFF0000) >> 16) / 255
         let g: CGFloat = CGFloat((v & 0x00FF00) >> 8) / 255
         let b: CGFloat = CGFloat(v & 0x0000FF) / 255
-        let a: CGFloat = hex.count > 7 ? CGFloat((v & 0xFF000000) >> 24) / 255 : 1
+        let a: CGFloat = hexString.count > 7 ? CGFloat((v & 0xFF000000) >> 24) / 255 : 1
         self.init(.sRGB, red: r, green: g, blue: b, opacity: a)
     }
 }
@@ -438,64 +466,6 @@ extension Double {
         formatter.currencyCode = "CNY"
         formatter.locale = Locale(identifier: "zh_CN")
         return formatter.string(from: NSNumber(value: self)) ?? "¥\(self)"
-    }
-}
-
-extension LedgerBook {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        icon = try container.decodeIfPresent(String.self, forKey: .icon)
-        color = try container.decodeIfPresent(String.self, forKey: .color)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        startDate = try container.decodeIfPresent(Date.self, forKey: .startDate)
-        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
-        budgetLimit = try container.decodeIfPresent(Double.self, forKey: .budgetLimit)
-        budgetStartDate = try container.decodeIfPresent(Date.self, forKey: .budgetStartDate)
-        budgetEndDate = try container.decodeIfPresent(Date.self, forKey: .budgetEndDate)
-        expenseAmount = try container.decodeIfPresent(Double.self, forKey: .expenseAmount)
-        incomeAmount = try container.decodeIfPresent(Double.self, forKey: .incomeAmount)
-        balance = try container.decodeIfPresent(Double.self, forKey: .balance)
-        transactionCount = try container.decodeIfPresent(Int.self, forKey: .transactionCount)
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
-        participantNames = try container.decodeIfPresent([String].self, forKey: .participantNames) ?? []
-        autoCollectCategoryIds = try container.decodeIfPresent([Int].self, forKey: .autoCollectCategoryIds) ?? []
-        autoCollectEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCollectEnabled) ?? false
-    }
-}
-
-extension LedgerTransaction {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        title = try container.decode(String.self, forKey: .title)
-        amount = try container.decode(Double.self, forKey: .amount)
-        happenedAt = try container.decode(Date.self, forKey: .happenedAt)
-        kind = try container.decode(FlowType.self, forKey: .kind)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        merchant = try container.decodeIfPresent(String.self, forKey: .merchant)
-        paymentMethod = try container.decodeIfPresent(String.self, forKey: .paymentMethod)
-        source = try container.decodeIfPresent(String.self, forKey: .source)
-        currency = try container.decodeIfPresent(String.self, forKey: .currency)
-        categoryId = try container.decodeIfPresent(Int.self, forKey: .categoryId)
-        categoryName = try container.decodeIfPresent(String.self, forKey: .categoryName)
-        bookId = try container.decodeIfPresent(Int.self, forKey: .bookId)
-        bookName = try container.decodeIfPresent(String.self, forKey: .bookName)
-        bookIds = try container.decodeIfPresent([Int].self, forKey: .bookIds)
-        bookNames = try container.decodeIfPresent([String].self, forKey: .bookNames)
-        installmentGroupId = try container.decodeIfPresent(String.self, forKey: .installmentGroupId)
-        installmentIndex = try container.decodeIfPresent(Int.self, forKey: .installmentIndex)
-        installmentMonths = try container.decodeIfPresent(Int.self, forKey: .installmentMonths)
-        installmentStartMonth = try container.decodeIfPresent(Date.self, forKey: .installmentStartMonth)
-        installmentOriginalTotal = try container.decodeIfPresent(Double.self, forKey: .installmentOriginalTotal)
-        originalAmount = try container.decodeIfPresent(Double.self, forKey: .originalAmount)
-        discountAmount = try container.decodeIfPresent(Double.self, forKey: .discountAmount)
-        premiumAmount = try container.decodeIfPresent(Double.self, forKey: .premiumAmount)
-        paidByParticipantId = try container.decodeIfPresent(String.self, forKey: .paidByParticipantId)
-        paidByParticipantName = try container.decodeIfPresent(String.self, forKey: .paidByParticipantName)
-        splitParticipantIds = try container.decodeIfPresent([String].self, forKey: .splitParticipantIds)
-        splitParticipantNames = try container.decodeIfPresent([String].self, forKey: .splitParticipantNames)
     }
 }
 
@@ -513,7 +483,7 @@ struct CategoryTrendResponse: Codable, Sendable {
     let series: [CategoryTrendSeries]
 }
 
-struct CategoryTrendDiverPoint: Identifiable, Sendable {
+struct CategoryTrendChartPoint: Identifiable, Sendable {
     let category: String
     let label: String
     let value: Double
@@ -533,6 +503,30 @@ struct OCRLineItem: Codable, Identifiable, Sendable {
     let id: String
     let label: String
     let value: String
+}
+
+extension OCRLineItem {
+    init(label: String, value: String) {
+        self.init(id: UUID().uuidString, label: label, value: value)
+    }
+}
+
+extension OCRImportResult {
+    init(amount: Double?, kind: FlowType?, merchant: String?, paymentMethod: String?, title: String?, happenedAt: Date?, categoryKeyword: String?, categoryPath: [String]?, details: [OCRLineItem]?, confidence: Double?, rawLines: [String]?, originalAmount: Double?, discountAmount: Double?) {
+        self.amount = amount
+        self.kind = kind
+        self.merchant = merchant
+        self.title = title
+        self.happenedAt = happenedAt
+        self.paymentMethod = paymentMethod
+        self.categoryKeyword = categoryKeyword
+        self.categoryPath = categoryPath
+        self.details = details
+        self.rawLines = rawLines
+        self.originalAmount = originalAmount
+        self.discountAmount = discountAmount
+        self.confidence = confidence
+    }
 }
 
 struct OCRImportResult: Codable, Identifiable, Sendable {
@@ -583,7 +577,7 @@ struct TransactionDraft {
     var installmentEnabled: Bool = false
     var installmentMonths: Int = 1
     var installmentStartMonth: Date = .now
-    var octText: String?
+    var ocrText: String?
     var source: String = "manual"
     var splitParticipantIds: [String] = []
     var paidByParticipantId: String?
@@ -601,7 +595,7 @@ struct TransactionDraft {
         self.happenedAt = transaction.happenedAt
         self.categoryId = transaction.categoryId
         self.bookId = transaction.bookId
-        self.bookIds = transaction.bookIds ?? (transaction.bookName.map { [$0] } ?? [])
+        self.bookIds = transaction.bookIds
         self.note = transaction.note ?? ""
         self.merchant = transaction.merchant ?? ""
         self.paymentMethod = transaction.paymentMethod ?? ""
@@ -612,7 +606,7 @@ struct TransactionDraft {
         self.installmentEnabled = transaction.installmentMonths != nil
         self.installmentMonths = transaction.installmentMonths ?? 1
         self.installmentStartMonth = transaction.installmentStartMonth ?? .now
-        self.octText = nil
+        self.ocrText = nil
         self.paidByParticipantId = transaction.paidByParticipantId
         self.splitParticipantIds = transaction.splitParticipantIds ?? []
     }
@@ -625,7 +619,7 @@ struct TransactionDraft {
         self.happenedAt = parsed.happenedAt ?? .now
         self.paymentMethod = parsed.paymentMethod ?? ""
         self.merchant = parsed.merchant ?? ""
-        self.note = parsed.note ?? ""
+        self.note = ""
         self.source = source
         self.originalAmount = parsed.originalAmount.map { String(format: "%.2f", $0) } ?? ""
         self.discountAmount = parsed.discountAmount.map { String(format: "%.2f", $0) } ?? ""
@@ -633,7 +627,7 @@ struct TransactionDraft {
         self.installmentEnabled = false
         self.installmentMonths = 1
         self.installmentStartMonth = .now
-        self.octText = parsed.rawLines?.joined(separator: "\n")
+        self.ocrText = parsed.rawLines?.joined(separator: "\n")
         self.paidByParticipantId = nil
         self.splitParticipantIds = []
     }
@@ -765,6 +759,7 @@ struct CategoryDraft: Encodable, Sendable {
         case flowType = "flow_type"
         case parentId = "parent_id"
     }
+}
 
 extension Date {
     var apiDateString: String {
@@ -785,62 +780,7 @@ extension Double {
         formatter.locale = Locale(identifier: "zh_CN")
         return formatter.string(from: NSNumber(value: self)) ?? "¥\(self)"
     }
-}
 
-extension LedgerBook {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        icon = try container.decodeIfPresent(String.self, forKey: .icon)
-        color = try container.decodeIfPresent(String.self, forKey: .color)
-        note = try container.decodeIfPresent(String.self, forKey: .note)
-        startDate = try container.decodeIfPresent(Date.self, forKey: .startDate)
-        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
-        budgetLimitAmount = try container.decodeIfPresent(Double.self, forKey: .budgetLimitAmount)
-        budgetStartDate = try container.decodeIfPresent(Date.self, forKey: .budgetStartDate)
-        budgetEndDate = try container.decodeIfPresent(Date.self, forKey: .budgetEndDate)
-        autoCollectEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCollectEnabled) ?? false
-        expenseAmount = try container.decodeIfPresent(Double.self, forKey: .expenseAmount)
-        incomeAmount = try container.decodeIfPresent(Double.self, forKey: .incomeAmount)
-        balance = try container.decodeIfPresent(Double.self, forKey: .balance)
-        transactionCount = try container.decodeIfPresent(Int.self, forKey: .transactionCount)
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
-        autoCollectEnabled = try container.decodeIfPresent(Bool.self, forKey: .autoCollectEnabled) ?? false
-        participantNames = try container.decodeIfPresent([String].self, forKey: .participantNames) ?? []
-        autoCollectCategoryIds = try container.decodeIfPresent([Int].self, forKey: .autoCollectCategoryIds) ?? []
-    }
-}
-
-extension LedgerTransaction {
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
-        title = try container.decode(String.self, forKey: .title)
-        amount = try container.decode(Double.self, forKey: .amount)
-        kind = try container.decode(FlowType.self, forKey: .kind)
-        happenedAt = try container.decode(Date.self, forKey: .happenedAt)
-        merchant = try container.decodeIfPresent(String.self, forKey: .merchant)
-        note = try container.decodeIfPresent(String.self, forKey: .merchant)
-        paymentMethod = try container.decodeIfPresent(String.self, forKey: .paymentMethod)
-        source = try container.decodeIfPresent(String.self, forKey: .source)
-        currency = try container.decodeIfPresent(String.self, forKey: .currency)
-        categoryId = try container.decodeIfPresent(Int.self, forKey: .categoryId)
-        categoryName = try container.decodeIfPresent(String.self, forKey: .categoryName)
-        bookId = try container.decodeIfPresent(Int.self, forKey: .bookId)
-        bookName = try container.decodeIfPresent(String.self, forKey: .bookName)
-        bookIds = try container.decodeIfPresent([String].self, forKey: .bookIds)?.compactMap { Int($0) } ?? []
-        bookNames = try container.decodeIfPresent([String].self, forKey: .bookNames) ?? []
-        installmentGroupId = try container.decodeIfPresent(String.self, forKey: .installmentGroupId)
-        installmentIndex = try container.decodeIfPresent(Int.self, forKey: .installmentIndex)
-        installmentMonths = try container.decodeIfPresent(Int.self, forKey: .installmentMonths)
-        originalAmount = try container.decodeIfPresent(Double.self, forKey: .originalAmount)
-        discountAmount = try container.decodeIfPresent(Double.self, forKey: .discountAmount)
-        premiumAmount = try container.decodeIfPresent(Double.self, forKey: .premiumAmount)
-        paidByParticipantId = try container.decodeIfPresent(String.self, forKey: .paidByParticipantId)
-        paidByParticipantName = try container.decodeIfPresent(String.self, forKey: .paidByParticipantName)
-        splitParticipantIds = try container.decodeIfPresent([String].self, forKey: .splitParticipantIds)
-        splitParticipantIds = try container.decodeIfPresent([String].self, forKey: .splitParticipantIds)
-        splitParticipantNames = try container.decodeIfPresent([String].self, forKey: .splitParticipantNames) ?? []
-    }
+    var cnyText: String { cnYText }
+    var cnText: String { cnYText }
 }

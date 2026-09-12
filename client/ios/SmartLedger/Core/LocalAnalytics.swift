@@ -33,19 +33,19 @@ enum LocalAnalytics {
         name: budget.name,
         limitAmount: budget.limitAmount,
         periodType: budget.periodType,
+        categoryId: budget.categoryId,
+        categoryName: budget.categoryName,
         year: budget.year,
         month: budget.month,
         startDate: budget.startDate,
         endDate: budget.endDate,
-        categoryId: budget.categoryId,
-        categoryName: budget.categoryName,
         spentAmount: (spent * 100).rounded() / 100.0,
         usageRatio: ratio
       )
     }
   }
 
-  static func overview(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], start: Date, end: Date, granularity: Granularity) -> AnalyticsOverview {
+  static func makeOverview(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], start: Date, end: Date, granularity: Granularity) -> AnalyticsOverview {
     let totalIncome = transactions.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.amount }
     let totalExpense = transactions.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.amount }
     let trend = makeTrend(transactions: transactions, granularity: granularity)
@@ -75,9 +75,9 @@ enum LocalAnalytics {
     }
     let top = totals.sorted { $0.value > $1.value }.prefix(8).map { $0.key }
     let series = top.map { name in
-      CategoryTrendSeries(category: name, values: labels.map { bucket[name]?[$0] ?? 0 })
+      CategoryTrendSeries(category: name, labels: labels, values: labels.map { bucket[name]?[$0] ?? 0 })
     }
-    return CategoryTrendResponse(labels: labels, series: series)
+    return CategoryTrendResponse(category: flowType.title, labels: labels, series: series)
   }
 
   private static func makeTrend(transactions: [LedgerTransaction], granularity: Granularity) -> [TrendPoint] {

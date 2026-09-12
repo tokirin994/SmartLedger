@@ -1,17 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct CreateTransactionView: View {
-    @EnvironmentObject private var store: LedgerStore; @Environment(\.dismiss) private var dismiss; var existing: LedgerTransaction?;
-    @State private var transaction: LedgerTransaction; @State private var installmentEnabled = false; @State private var selectedBooks: Set<UUID> = []
-    init(existing: LedgerTransaction? = nil) { self.existing = existing; _transaction = State(initialValue: existing ?? LedgerTransaction(title: "", amount: 0, kind: .expense)); _selectedBooks = State(initialValue: Set(existing?.bookIDs ?? [])); _installmentEnabled = State(initialValue: (existing?.installmentMonths ?? 1) > 1) }
-    var body: some View { Form { Section("基础信息") { Picker("类型", selection: $transaction.kind) { ForEach(FlowType.allCases) { kind in Text(kind.title).tag(kind) } } TextField("标题", text: $transaction.title); TextField("金额", value: $transaction.amount, format: .number.precision(.fractionLength(2))).keyboardType(.decimalPad); TextField("支付渠道", text: $transaction.paymentMethod); DatePicker("时间", selection: $transaction.happenedAt) }
-        Section("分类与账本") { Picker("分类", selection: $transaction.categoryId) { Text("未分类").tag(UUID?.none); ForEach(store.categories.filter { $0.kind == transaction.kind }) { category in Text(category.name).tag(category.id) } }.tag(Optional(category.id)); if store.recommendBooks && !store.books.filter { store.automaticBookIDs(for: $0).contains($0.id) }.isEmpty { Text("推荐归入: \(store.books.filter { store.automaticBookIDs(for: $0).contains($0.id) }.map{$0.name}.joined(separator: ", "))").font(.caption).foregroundStyle(.blue) }; NavigationLink("账本归属 (可多选)") { List(store.books) { book in Button { if selectedBooks.contains(book.id) { selectedBooks.remove(book.id) } else { selectedBooks.insert(book.id) } } label: { HStack { Label(book.name, systemImage: book.icon); Spacer(); if selectedBooks.contains(book.id) { Image(systemName: "checkmark").foregroundStyle(.blue) } } } } }
-        Section("分期与分账") { Toggle("启用分期", isOn: $installmentEnabled); if installmentEnabled { Stepper("分期月数: \(transaction.installmentMonths)", value: $transaction.installmentMonths, in: 2...36) }; if let book = store.books.first(where: { selectedBooks.contains($0.id) && $0.participants.count > 1 }) { Picker("付款人", selection: $transaction.paidBy) { Text("请选择").tag(""); ForEach(book.participants, id: \.self) { participant in Text(participant.name).tag(participant.id) } }; Toggle("分给 \(participant.name)", isOn: Binding(get: { transaction.splitParticipantIds.contains(participant.id) }, set: { isSelected in if isSelected { transaction.splitParticipantIds.append(participant.id) } else { transaction.splitParticipantIds.removeAll { $0 == participant.id } } })) }
-        Section("高级") { TextField("商户", text: $transaction.merchant); TextField("备注", text: $transaction.note); TextField("原价", value: $transaction.originalAmount, format: .number); TextField("优惠", value: $transaction.discountAmount, format: .number) }
-    }
-    .navigationTitle(existing == nil ? "新增流水" : "编辑流水").toolbar { ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(transaction.amount <= 0 || !transaction.title.trimmingCharacters(in: .whitespaces).isEmpty) }; ToolbarItem(placement: .cancellationAction) { if existing != nil { Button("取消") { dismiss() } } }
-    private func save() { transaction.bookIDs = Array(selectedBooks); if transaction.bookIDs.isEmpty && store.recommendBooks { transaction.bookIDs = store.automaticBookIDs(for: transaction) }; if let book = store.books.filter { store.automaticBookIDs(for: transaction).contains($0.id) }.first, transaction.splitParticipantIds.count > 0 { transaction.paidBy.isEmpty { transaction.splitParticipantIds.removeAll() } }; if installmentEnabled && transaction.installmentMonths > 1 { let group = UUID(); let monthly = transaction.amount / Double(transaction.installmentMonths); for index in 0..<transaction.installmentMonths { var item = transaction; item.id = UUID(); item.amount = monthly; item.installmentGroupID = group; item.installmentIndex = index + 1; item.happenedAt = Calendar.current.date(byAdding: .month, value: index, to: transaction.happenedAt)!; store.add(item) } } else if existing == nil { store.add(transaction) } else { store.update(transaction) }; dismiss() }
     @EnvironmentObject private var store: LedgerStore
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @State private var draft = TransactionDraft()
     private let editingTransaction: LedgerTransaction?
@@ -146,7 +138,7 @@ struct CreateTransactionView: View {
                             )) {
                                 Text("请选择付款人").tag(String?.none)
                                 ForEach(splitParticipants) { participant in
-                                    Text(participant.name).tag(participant.some(participant.id))
+                                    Text(participant.name).tag(Optional(participant.id))
                                 }
                             }
 
@@ -301,6 +293,7 @@ struct CreateTransactionView: View {
         Text("退出前可以选择先保存，或者直接丢弃这次改动。")
     }
 }
+}
 
 private var selectedBookNamesText: String {
     let names = selectedBooks.map(\.name)
@@ -360,6 +353,7 @@ private func saveDraftAndDismiss() async {
     if store.errorMessage == nil {
         dismiss()
     }
+}
 }
 
 private struct TransactionEditorStateSnapshot: Equatable {
@@ -821,11 +815,9 @@ struct HierarchicalCategoryPicker: View {
     
     private var selectedDisplayName: String {
         guard let selectedCategoryId else {
-            let name = displayName(for: selectedCategoryId, in: categories)
-            return name
-        } else {
             return placeholder
         }
+        return displayName(for: selectedCategoryId, in: categories) ?? placeholder
     }
     
     private func displayName(for id: Int, in categories: [LedgerCategory], path: [String] = []) -> String? {
@@ -1020,3 +1012,62 @@ private struct CategoryNodeSelectionView: View {
 }
 
 
+typealias CategoryEditorSheet = CategoryEditorView
+
+/// 阻止滑动手势直接关闭 sheet：有未保存更改时拦截下滑手势，触发 onAttempt 回调。
+struct SheetDismissGuard: View {
+    let isDisabled: Bool
+    let onAttempt: () -> Void
+
+    var body: some View {
+        EmptyView()
+            .interactiveDismissDisabled(isDisabled)
+            .background(DismissAttemptObserver(onAttempt: onAttempt))
+    }
+}
+
+private struct DismissAttemptObserver: UIViewControllerRepresentable {
+    let onAttempt: () -> Void
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller(onAttempt: onAttempt)
+    }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.onAttempt = onAttempt
+    }
+
+    @MainActor
+    final class Controller: UIViewController, UIAdaptivePresentationControllerDelegate {
+        var onAttempt: () -> Void
+
+        init(onAttempt: @escaping () -> Void) {
+            self.onAttempt = onAttempt
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            attachToPresentationController()
+        }
+
+        private func attachToPresentationController() {
+            var target: UIViewController? = parent
+            while let current = target {
+                if let presentation = current.presentationController {
+                    presentation.delegate = self
+                    return
+                }
+                target = current.parent
+            }
+        }
+
+        func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+            onAttempt()
+        }
+    }
+}

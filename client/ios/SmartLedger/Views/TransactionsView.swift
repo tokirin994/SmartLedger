@@ -33,25 +33,9 @@ struct TransactionsView: View {
                         ForEach(groupedTransactions, id: \.dateKey) { group in
                             Section {
                                 ForEach(group.items, id: \.id) { tx in
-                                    TransactionRow(tx: tx)
-                                        .onTapGesture {
-                                            editingTransaction = tx
-                                        }
-                                        Button("删除", role: .destructive) {
-                                            pendingDeleteTransaction = tx
-                                        }
-                                        Button("账本") {
-                                            quickBookTransaction = tx
-                                        }
-                                        .tint(.purple)
-
-                                        Button("分类") {
-                                            quickAssignTransaction = tx
-                                        }
-                                        .tint(.blue)
-                                    }
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                                    .listRowBackground(Color.clear)
+                                    transactionListRow(tx)
+                                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                        .listRowBackground(Color.clear)
                                 }
                             } header: {
                                 HStack {
@@ -79,62 +63,20 @@ struct TransactionsView: View {
                     .scrollContentBackground(.hidden)
                     .appBackground()
                 }
-                .navigationTitle("流水")
-                .toolbar {
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button {
-                            Task { await store.loadTransactions() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-
-                        Button {
-                            showCreateSheet = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                    }
-
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showFilter = true
-                        } label: {
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                    }
-                }
+            }
+            .navigationTitle("流水")
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: 10) {
                         filterBar
-                        scopeAndCategoryBar
+                        categoryFilterBar
                         customDateFilterBar
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
                     .background(.ultraThinMaterial)
                 }
-                .sheet(isPresented: $showAddSheet) {
-                    CreateTransactionView(transaction: nil)
-                        .environmentObject(store)
-                }
-                .sheet(item: $editingTransaction) { tx in
-                    EditTransactionView(transaction: tx)
-                        .environmentObject(store)
-                }
-                .alert("删除确认", isPresented: Binding(get: { pendingDeleteTransaction != nil }, set: { _ in
-pendingDeleteTransaction = nil })) {
-                    Button("取消", role: .cancel) {}
-                    Button("删除", role: .destructive) {
-                        if let tx = pendingDeleteTransaction {
-                            Task { await store.deleteTransaction(tx.id) }
-                        }
-                        pendingDeleteTransaction = nil
-                    }
-                } message: {
-                    Text("删除后不可恢复。")
-                }
                 .sheet(isPresented: $showCreateSheet) {
-                    CreateTransactionView(store)
+                    CreateTransactionView()
                         .environmentObject(store)
                 }
                 .sheet(item: $editingTransaction) { tx in
@@ -149,8 +91,7 @@ pendingDeleteTransaction = nil })) {
                     QuickBookAssignSheet(transaction: tx)
                         .environmentObject(store)
                 }
-                .alert("删除这笔流水?", isPresented: Binding(get: { pendingDeleteTransaction != nil }, set: { if !$0 {
-pendingDeleteTransaction = nil } })) {
+                .alert("删除这笔流水?", isPresented: deleteAlertBinding) {
                     Button("取消", role: .cancel) {}
                     Button("删除", role: .destructive) {
                         if let tx = pendingDeleteTransaction {
@@ -163,47 +104,29 @@ pendingDeleteTransaction = nil } })) {
                 }
                 .onAppear {
                     Task {
-                        .task {
-                            if store.transactions.isEmpty {
-                                await store.loadTransactions()
-                                await reloadTransactions()
-                            }
-                            await store.refreshOverview(range: store.activeRangePhase, granularity: store.activeGranularity)
+                        if store.transactions.isEmpty {
+                            await store.loadTransactions()
+                            await reloadTransactions()
                         }
                     }
-                .refreshable {
-                    await reloadTransactions()
-                    await store.refreshDashboard(range: store.activeRangePreset, granularity: store.activeGranularity)
                 }
-                .onReceive(NotificationCenter.default.publisher(for: .smartLedgerResetTabRoot)) { note in
-                    guard let tab = note.object as? RootTab, tab == .transactions else { return }
-                    navPath = NavigationPath()
+        }
+    }
+
+    private var deleteAlertBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteTransaction != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingDeleteTransaction = nil
                 }
             }
-        }
-
-    private var groupedTransactions: [(key: String, items: [LedgerTransaction])] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy年M月d日"
-        let groups = Dictionary(grouping: filteredTransactions) { formatter.string(from: $0.happenedAt) }
-        return groups.sorted { $0.key > $1.key }
+        )
     }
 
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                ForEach(Filter.allCases, id: \.self) { filter in
-                    Button {
-                        selectedFilter = filter
-                    } label: {
-                        Text(filter.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(selectedFilter == filter ? .white : .primary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(selectedFilter == filter ? Color.blue : Color.white.opacity(0.10), in: Capsule())
-                    }
-                }
                 HStack(spacing: 10) {
                     ForEach(FlowFilter.allCases) { filter in
                         Button {
@@ -229,7 +152,7 @@ pendingDeleteTransaction = nil } })) {
     }
 
     private var categoryFilterBar: some View {
-        private var scopeAndCategoryBar: some View {
+    
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Button("全部分类") {
@@ -253,7 +176,6 @@ pendingDeleteTransaction = nil } })) {
                     Spacer()
 
                     Menu {
-                        ForEach(Category.transactionRootOptions) { category in
                             Button("全部分类") {
                                 selectedCategoryId = nil
                             }
@@ -263,14 +185,12 @@ pendingDeleteTransaction = nil } })) {
                                     selectedCategoryId = category.id
                                 }
                             }
-                        }
                     } label: {
                         HStack {
                             Text(selectedCategoryTitle)
                             Image(systemName: "line.3.horizontal.decrease.circle")
                         }
                         .foregroundStyle(.secondary)
-                        filterChip(title: selectedCategoryTitle, systemImage: "line.3.horizontal.decrease.circle")
                     }
                 }
 
@@ -299,7 +219,6 @@ pendingDeleteTransaction = nil } })) {
                             startDate = range.start
                             endDate = range.end
                         }
-                        .font(.caption.weight(.semibold))
                     }
                 }
                 .pickerStyle(.segmented)
@@ -316,7 +235,6 @@ pendingDeleteTransaction = nil } })) {
                 Task { await reloadTransactions() }
             }
         }
-    }
 
     private var customDateFilterBar: some View {
         Group {
@@ -331,15 +249,16 @@ pendingDeleteTransaction = nil } })) {
                     DatePicker("结束", selection: $endDate, displayedComponents: .date)
                         .labelsHidden()
                 }
-                .padding(12)
                 .glassCard(cornerRadius: 18, strokeOpacity: 0.22)
                 .onChange(of: startDate) { _, _ in
                     Task { await reloadTransactions() }
  		}
- 		.onChange(of: endDate) { _, _ in
- 			Task { await reloadTransactions() }
- 		}
- 	}
+        .onChange(of: endDate) { _, _ in
+            Task { await reloadTransactions() }
+        }
+    }
+        }
+    }
 
 	private var summaryHeader: some View {
 		Section {
@@ -369,14 +288,37 @@ pendingDeleteTransaction = nil } })) {
  			.padding(12)
  			.glassCard(cornerRadius: 18, strokeOpacity: 0.22)
  		}
- 	}
- 	@ViewBuilder
- 	HStack(alignment: .top, spacing: 14) {
+	}
+	@ViewBuilder
+	private func transactionListRow(_ tx: LedgerTransaction) -> some View {
+		Group {
+			transactionRow(tx)
+				.onTapGesture {
+					editingTransaction = tx
+				}
+			HStack(spacing: 8) {
+				Button("删除", role: .destructive) {
+					pendingDeleteTransaction = tx
+				}
+				Button("账本") {
+					quickBookTransaction = tx
+				}
+				.tint(.purple)
+				Button("分类") {
+					quickAssignTransaction = tx
+				}
+				.tint(.blue)
+			}
+		}
+	}
+	@ViewBuilder
+	private func transactionRow(_ tx: LedgerTransaction) -> some View {
+	HStack(alignment: .top, spacing: 14) {
  		ZStack {
 			Circle()
  				.fill(badgeColor(for: tx).opacity(0.14))
  				.frame(width: 42, height: 42)
-			Image(systemName: categoryIcon(for: tx.categoryId))
+			Image(systemName: categoryIcon(for: tx))
  			Image(systemName: badgeIcon(for: tx))
  				.font(.system(size: 18, weight: .semibold))
  				.foregroundStyle(.white)
@@ -395,7 +337,8 @@ pendingDeleteTransaction = nil } })) {
  						.foregroundStyle(tx.kind == .income ? .green : .primary)
  				}
  				if tx.installmentMonths != nil {
- 					Label("分期", systemImage: "repeat.circle", tint: .orange)
+					Label("分期", systemImage: "repeat.circle")
+						.foregroundStyle(.orange)
  				}
  				ScrollView(.horizontal, showsIndicators: false) {
  					HStack(spacing: 8) {
@@ -427,27 +370,21 @@ pendingDeleteTransaction = nil } })) {
  				if tx.installmentMonths != nil {
  					infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange)
  				}
- 				.padding(.vertical, 1)
  			}
  		}
  			HStack(spacing: 12) {
- 				Label(tx.happenedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
- 					.foregroundStyle(calendarMetadataForeground)
- 					.padding(.horizontal, 8)
- 					.padding(.vertical, 5)
- 					.background(calendarMetadataBackground, in: Capsule())
- 				if let merchant = tx.merchant, !merchant.isEmpty {
- 					Label(merchant, systemImage: "storefront")
- 						.lineLimit(1)
- 						.foregroundStyle(.secondary)
- 					Text(original.cnfText)
- 						.font(.caption)
- 						.strikethrough()
- 						.foregroundStyle(.secondary)
- 				}
- 				.font(.caption)
- 				.foregroundStyle(.secondary)
- 			}
+	 				Label(tx.happenedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+	 					.foregroundStyle(calendarMetadataForeground)
+	 					.padding(.horizontal, 8)
+	 					.padding(.vertical, 5)
+	 					.background(calendarMetadataBackground, in: Capsule())
+	 				if let merchant = tx.merchant, !merchant.isEmpty {
+	 					Label(merchant, systemImage: "storefront")
+	 						.lineLimit(1)
+	 						.font(.caption)
+	 						.foregroundStyle(.secondary)
+	 				}
+	 			}
  			if let paymentMethod = tx.paymentMethod, !paymentMethod.isEmpty {
  				ScrollView(.horizontal, showsIndicators: false) {
  					HStack(spacing: 8) {
@@ -460,44 +397,20 @@ pendingDeleteTransaction = nil } })) {
  			if tx.discountAmount != nil || tx.premiumAmount != nil || tx.originalAmount != nil {
  				HStack(spacing: 10) {
  					if let original = tx.originalAmount {
- 						miniMetric(title: "原价", value: original.cnfText, tint: .secondary)
- 					}
- 						miniMetric(title: "优惠", value: discount.cnfText, tint: .green)
- 					}
- 						miniMetric(title: "溢价", value: premium.cnfText, tint: .red)
- 					}
+						miniMetric(title: "原价", value: original.cnyText, tint: .secondary)
+					}
+					if let discount = tx.discountAmount {
+						miniMetric(title: "优惠", value: discount.cnyText, tint: .green)
+					}
+					if let premium = tx.premiumAmount {
+						miniMetric(title: "溢价", value: premium.cnyText, tint: .red)
+					}
  				}
  			}
- 			if let merchant = tx.merchant {
- 				HStack(spacing: 6) {
- 					Image(systemName: "storefront")
- 					Text(merchant)
- 				}
- 				.font(.caption)
- 				.foregroundStyle(.secondary)
- 			}
- 			if let paymentMethod = tx.paymentMethod, paymentMethod != "manual" {
- 				HStack(spacing: 6) {
- 					Image(systemName: "creditcard.fill")
- 					Text(paymentMethod)
- 				}
- 				.font(.caption)
- 				.foregroundStyle(.secondary)
- 			}
- 			if tx.discountAmount != nil || tx.premiumAmount != nil || tx.originalAmount != nil {
- 				HStack(spacing: 6) {
- 					Image(systemName: "doc.text")
- 					Text("详情")
- 				}
- 				.font(.caption)
- 				.foregroundStyle(.secondary)
- 			}
- 			.padding(.vertical, 4)
- 			.glassBackground(cornerRadius: 22, strokeOpacity: 0.22)
- 			.padding(14)
- 			.glassCard(cornerRadius: 22, strokeOpacity: 0.22)
+			
  		}
- 	private func infoPill(title: String, systemImage: String, trailingText: String, tint: Color = .primary) -> some View {
+	}
+
  	private func infoPill(text: String, systemImage: String, tint: Color = .secondary) -> some View {
  		Label(text, systemImage: systemImage)
  			.font(.caption.weight(.medium))
@@ -511,7 +424,6 @@ pendingDeleteTransaction = nil } })) {
  	private func iconOnlyPill(systemImage: String, trailingText: String, tint: Color = .purple) -> some View {
  		HStack(spacing: 6) {
  			Image(systemName: systemImage)
- 			Text(title)
  			Spacer()
  			Text(trailingText)
  		}
@@ -524,8 +436,20 @@ pendingDeleteTransaction = nil } })) {
  		.background(Color.white.opacity(0.14), in: Capsule())
  	}
  
- 	private func amountPill(title: String, value: String, tint: Color) -> some View {
- 		HStack(alignment: .firstTextBaseline, spacing: 2) {
+    private func amountPill(title: String, value: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
  	private func miniMetric(title: String, value: String, tint: Color) -> some View {
  		VStack(alignment: .leading, spacing: 2) {
 			Text(title)
@@ -542,7 +466,7 @@ pendingDeleteTransaction = nil } })) {
  	}
  
  	private func signedAmountText(for tx: LedgerTransaction) -> String {
- 		(tx.kind == .expense ? "-tx.amount : tx.amount).cnyText
+        (tx.kind == .expense ? -tx.amount : tx.amount).cnyText
  	}
  
  	private func installmentText(for tx: LedgerTransaction) -> String {
@@ -676,7 +600,8 @@ pendingDeleteTransaction = nil } })) {
  			return false
  		}
  
- 		return transactionCategory.pathComponents.starts(with: selectedCategory.pathComponents)
+ 		guard let transactionCategory = store.flattenedCategories.first(where: { $0.id == transactionCategoryId }) else { return false }
+		return transactionCategory.pathComponents.starts(with: selectedCategory.pathComponents)
  	}
  
  	private var groupedTransactions: [TransactionDayGroup] {
@@ -688,7 +613,7 @@ pendingDeleteTransaction = nil } })) {
  				let partial = items.reduce(0.0) { partial, tx in
  					partial + (tx.kind == .income ? tx.amount : -tx.amount)
  				}
- 				return TransactionDayGroup(dateKey: day, title: day.formatted(date: .abbreviated, time: .omitted), total: total, items: items.sorted { $0.happenedAt > $1.happenedAt })
+ 				return TransactionDayGroup(dateKey: day, title: day.formatted(date: .abbreviated, time: .omitted), total: partial, items: items.sorted { $0.happenedAt > $1.happenedAt })
  			}
  			.sorted { $0.dateKey > $1.dateKey }
  	}
@@ -706,9 +631,9 @@ pendingDeleteTransaction = nil } })) {
  	}
  
  	private func reloadTransactions() async {
- 		await store.refreshDashboard(range: store.activeRangePreset, granularity: store.activeGranularity)
  	}
- }
+}
+
 private struct QuickCategoryAssignSheet: View {
     @EnvironmentObject private var store: LedgerStore
     @Environment(\.dismiss) private var dismiss
@@ -896,18 +821,58 @@ private struct TransactionBooksPopover: View {
     }
 }
 
+private enum FlowFilter: String, CaseIterable, Identifiable {
+    case all
+    case expense
+    case income
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .expense: return "支出"
+        case .income: return "收入"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .all: return .blue
+        case .expense: return .orange
+        case .income: return .green
+        }
+    }
+}
+
 private enum TransactionDateScope: String, CaseIterable, Identifiable {
     case recent7Days
     case recent30Days
-case .expense: return "支出"
-case .income: return "收入"
-}
+    case custom
 
-var tint: Color {
-    switch self {
-    case .all: return .blue
-    case .expense: return .orange
-    case .income: return .green
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .recent7Days: return "近 7 天"
+        case .recent30Days: return "近 30 天"
+        case .custom: return "自定义"
+        }
+    }
+
+    var summaryText: String { title }
+
+    var defaultDates: (start: Date, end: Date) {
+        switch self {
+        case .recent7Days:
+            let start = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+            return (start, Date())
+        case .recent30Days:
+            let start = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+            return (start, Date())
+        case .custom:
+            return (Date(), Date())
+        }
     }
 }
 

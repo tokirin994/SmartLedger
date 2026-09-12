@@ -152,8 +152,8 @@ struct ReceiptParser {
         let text = lines.joined(separator: "\n")
         let amountLine = lines.first(where: { $0.range(of: #"^‑?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
-        let happenedAt = extractDate(from: lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) })
-        let paymentMethod = normalizePaymentMethod(extractAlipayDetailPaymentMethod(from: lines))
+        let happenedAt = lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) }
+        let paymentMethod = extractAlipayDetailPaymentMethod(from: lines)
         let merchant = extractAlipayDetailMerchant(from: lines)
         let title = extractAlipayDetailTitle(from: lines) ?? merchant
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)
@@ -185,7 +185,7 @@ struct ReceiptParser {
         for section in buildAlipayListSections(from: filtered) {
             let items = parseAlipayListItems(in: section.lines, expenseTotal: section.expenseTotal)
             for (itemIndex, item) in items.enumerated() {
-                let rawAmount = item.amountText.flatMap { extractSignedAmount(from: $0) } ?? item.amountText.flatMap { extractCurrency(from: $0.map { -abs($0) }) } ?? {
+                let rawAmount = item.amountText.flatMap { extractSignedAmount(from: $0) } ?? item.amountText.flatMap { text in extractCurrency(from: text).map { -$0 } } ?? {
                     if items.count == 1, let total = section.expenseTotal { return -abs(total) }
                     return nil
                 }()
@@ -230,10 +230,10 @@ struct ReceiptParser {
         let amount = extractDetailAmount(from: lines)
         let originalAmount = extractOriginalAmount(from: lines, fieldMap: fieldMap)
         let discountAmount = extractDiscountAmount(from: lines, fieldMap: fieldMap)
-        let happenedAt = extractDate(from: extractDetailTime(from: fieldMap) ?? text)!
+        let happenedAt = extractDate(from: fieldMap["支付时间"] ?? fieldMap["转账时间"] ?? text)
         let merchant = preferredDetailMerchant(fieldMap: fieldMap, lines: lines)
         let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant)
-        let paymentMethod = extractDetailPaymentMethod(fieldMap: fieldMap, lines: lines)
+        let paymentMethod = extractPaymentMethod(fieldMap: fieldMap, lines: lines)
         let kind = detectKind(in: text)
         let details = detailItems(from: fieldMap)
         let (categoryKeyword, categoryPath, categoryConfidence) = classify(text: [title, merchant, paymentMethod, fieldMap["商品"], fieldMap["商品说明"], text].compactMap { $0 }.joined(separator: "\n"))
@@ -296,9 +296,10 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
     }
 
     for idx in records.indices {
-        guard let amount = extractSignedAmount(from: amountLines[idx]) else {
-            let happenedAt = parseListDate(records[idx].dateLine, fallbackYear: currentYear, monthOverride: records[idx].month)
-            else { continue
+        guard let amount = extractSignedAmount(from: amountLines[idx]),
+              let happenedAt = parseListDate(records[idx].dateLine, fallbackYear: currentYear, monthOverride: records[idx].month) else {
+            continue
+        }
 
         let kind: FlowType = amount < 0 ? .expense : .income
         let displayAmount = abs(amount)
@@ -398,7 +399,7 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
             i = max(j, k)
             continue
         }
-         i| += 1
+         i += 1
        }
        for (index, line) in lines.enumerated() {
          for label in detailFieldLabels where line == label || line.contains(label + ": ") || line.contains(label +
@@ -614,6 +615,8 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
          "yyyy年M月d日 HH:mm",
          "yyyy‑MM‑dd HH:mm:ss",
          "yyyy‑MM‑dd HH:mm",
+         "yyyy-MM-dd HH:mm:ss",
+         "yyyy-MM-dd HH:mm",
          "M月d日 HH:mm"
        ]
        for format in formats {
@@ -690,9 +693,16 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return fallback
      }
 
+     private func inferListPaymentMethod(fromPageLines lines: [String]) -> String? {
+       let text = lines.joined(separator: "\n")
+       if text.contains("支付宝") { return "支付宝" }
+       if text.contains("微信零钱") || text.contains("零钱") { return "微信零钱" }
+       if text.contains("微信") { return "微信" }
+       return nil
+     }
+
      private func inferKind(in text: String, lines: [String], amountLine: String?, fallback: FlowType) -> FlowType {
-       if text.contains("付款") || text.contains("支出") || text.contains("支付成功") || text.contains("扫码付款") { return
- .expense }
+       if text.contains("付款") || text.contains("支出") || text.contains("支付成功") || text.contains("扫码付款") { return .expense }
        if text.contains("收款") && !text.contains("付款") { return .income }
        if let amountLine, amountLine.contains("-") { return .expense }
        return fallback
@@ -1037,7 +1047,7 @@ private func isNoiseLine(_ line: String) -> Bool {
     if detailFieldLabels.contains(line) { return false }
     if line.range(of: #"^\d{1,3}\.\d{1,3}\%?$"#, options: .regularExpression) != nil { return true }
     if line.range(of: #"^\d{1,2}:\d{2},\d{2}$"#, options: .regularExpression) != nil { return true }
-    return line.count <= 1 { return true }
+    if line.count <= 1 { return true }
     return false
 }
 
@@ -1095,3 +1105,4 @@ private func normalizeClassifiedResult(kind: FlowType, _ raw: (keyword: String?,
     return (keyword, path, confidence)
 }
 
+}

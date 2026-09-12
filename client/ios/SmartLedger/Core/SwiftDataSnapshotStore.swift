@@ -191,7 +191,7 @@ actor SwiftDataSnapshotStore {
       cloudKitDatabase: .none
     )
     do {
-      return try ModelContainer(for: configuration)
+      return try buildContainer(configuration: configuration)
     } catch {
       guard !inMemory else {
         fatalError("Failed to create in-memory SwiftData container: \(error)")
@@ -199,7 +199,7 @@ actor SwiftDataSnapshotStore {
 
       let removed = resetPersistentStoreFiles(named: storeName)
       do {
-        return try ModelContainer(for: configuration)
+        return try buildContainer(configuration: configuration)
       } catch {
         fatalError("Failed to create SwiftData container after resetting local store. RemovedFiles=\(removed). Error=\(error)")
       }
@@ -392,10 +392,10 @@ private extension LedgerBookRecord {
      note: note,
      startDate: startDate,
      endDate: endDate,
-     autoCollectEnabled: autoCollectEnabled,
      budgetLimitAmount: budgetLimitAmount,
      budgetStartDate: budgetStartDate,
      budgetEndDate: budgetEndDate,
+     autoCollectEnabled: autoCollectEnabled,
      expenseAmount: expenseAmount,
      incomeAmount: incomeAmount,
      balance: balance,
@@ -414,15 +414,15 @@ private extension LedgerTransactionRecord {
      title: transaction.title,
      amount: transaction.amount,
      kindRaw: transaction.kind.rawValue,
-     happenedAt: transaction.happenedAt,
-     merchant: transaction.merchant,
+     date: transaction.happenedAt,
      note: transaction.note,
+     merchant: transaction.merchant,
      paymentMethod: transaction.paymentMethod,
      source: transaction.source,
      currency: transaction.currency,
      categoryId: transaction.categoryId,
      categoryName: transaction.categoryName,
-     bookId: transaction.bookId,
+     bookId: transaction.bookId ?? 0,
      bookName: transaction.bookName,
      bookIdsData: (try? JSONEncoder().encode(transaction.bookIds)) ?? Data("[]".utf8),
      bookNamesData: (try? JSONEncoder().encode(transaction.bookNames)) ?? Data("[]".utf8),
@@ -431,8 +431,8 @@ private extension LedgerTransactionRecord {
      installmentMonths: transaction.installmentMonths,
      installmentOriginalTotal: transaction.installmentOriginalTotal,
      originalAmount: transaction.originalAmount,
-     premiumAmount: transaction.premiumAmount,
      discountAmount: transaction.discountAmount,
+     preAmount: transaction.premiumAmount,
      paidByParticipantId: transaction.paidByParticipantId,
      paidByParticipantName: transaction.paidByParticipantName,
      splitParticipantIdsData: (try? JSONEncoder().encode(transaction.splitParticipantIds)) ?? Data("[]".utf8),
@@ -446,9 +446,9 @@ private extension LedgerTransactionRecord {
      title: title,
      amount: amount,
      kind: FlowType(rawValue: kindRaw) ?? .expense,
-     happenedAt: happenedAt,
-     merchant: merchant,
+     happenedAt: date,
      note: note,
+     merchant: merchant,
      paymentMethod: paymentMethod,
      source: source,
      currency: currency,
@@ -461,14 +461,14 @@ private extension LedgerTransactionRecord {
      installmentGroupId: installmentGroupId,
      installmentIndex: installmentIndex,
      installmentMonths: installmentMonths,
-     installmentOriginalTotal: installmentOriginalTotal,
-     originalAmount: originalAmount,
-     premiumAmount: premiumAmount,
-     discountAmount: discountAmount,
      paidByParticipantId: paidByParticipantId,
      paidByParticipantName: paidByParticipantName,
-     splitParticipantIds: (try? JSONDecoder().decode([String].self, from: splitParticipantIdsData)) ?? [],
-     splitParticipantNames: (try? JSONDecoder().decode([String].self, from: splitParticipantNamesData)) ?? []
+     splitParticipantIds: (try? JSONDecoder().decode([String].self, from: splitParticipantIdsData ?? Data("[]".utf8))) ?? [],
+     splitParticipantNames: (try? JSONDecoder().decode([String].self, from: splitParticipantNamesData ?? Data("[]".utf8))) ?? [],
+     installmentOriginalTotal: installmentOriginalTotal,
+     originalAmount: originalAmount,
+     discountAmount: discountAmount,
+     premiumAmount: preAmount
    )
  }
 }
@@ -497,12 +497,12 @@ private extension LedgerBudgetRecord {
      name: name,
      limitAmount: limitAmount,
      periodType: periodType,
+     categoryId: categoryId,
+     categoryName: categoryName,
      year: year,
      month: month,
      startDate: startDate,
      endDate: endDate,
-     categoryId: categoryId,
-     categoryName: categoryName,
      spentAmount: spentAmount,
      usageRatio: usageRatio
    )

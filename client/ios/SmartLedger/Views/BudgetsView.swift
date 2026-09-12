@@ -61,6 +61,7 @@ struct BudgetView: View {
    .glassCard(cornerRadius: 20, strokeOpacity: 0.22)
  }
 
+ @ViewBuilder
  private var budgetCardsSection: some View {
    if store.budgets.isEmpty {
      ContentUnavailableView("暂无预算", systemImage: "wallet.pass")
@@ -81,12 +82,12 @@ struct BudgetView: View {
    let totalLimit = store.budgets.reduce(0.0) { $0 + $1.limitAmount }
    let totalSpent = store.budgets.reduce(0.0) { $0 + $1.spentAmount }
    guard totalLimit > 0 else { return "等待创建预算" }
-   return "已用 \(totalSpent / totalLimit * 100).formatted(.number.precision(.fractionLength(1)))%"
+   return "已用 \((totalSpent / totalLimit * 100).formatted(.number.precision(.fractionLength(1))))%"
  }
 }
 
 struct BudgetStatCard: View {
- var item: Budget
+ var item: BudgetItem
 
  var body: some View {
    VStack(alignment: .leading, spacing: 12) {
@@ -101,7 +102,7 @@ struct BudgetStatCard: View {
 
        Spacer()
 
-       Text(item.periodType == .range ? "自定义预算" : "月度预算")
+       Text(item.periodType == "range" ? "自定义预算" : "月度预算")
          .font(.caption.weight(.semibold))
          .padding(.horizontal, 10)
          .padding(.vertical, 6)
@@ -118,7 +119,7 @@ struct BudgetStatCard: View {
        .tint(progressColor)
 
      HStack {
-       Label("已用 \(item.usageRatio * 100).formatted(.number.precision(.fractionLength(1)))%", systemImage: "chart.pie.fill")
+       Label("已用 \((item.usageRatio * 100).formatted(.number.precision(.fractionLength(1))))%", systemImage: "chart.pie.fill")
          .font(.caption)
          .foregroundStyle(.secondary)
 
@@ -156,13 +157,13 @@ struct BudgetStatCard: View {
  }
 
  private var periodText: String {
-   if item.periodType == .range {
+   if item.periodType == "range" {
      let startText = item.startDate?.formatted(date: .abbreviated, time: .omitted) ?? "-"
      let endText = item.endDate?.formatted(date: .abbreviated, time: .omitted) ?? "无截止"
      return "\(startText) ~ \(endText)"
    }
    if let month = item.month {
-     return "\(month)年\(item.year)%@(month)月"
+     return "\(item.year)年\(month)月"
    }
    return "长期按月"
  }
@@ -212,8 +213,8 @@ private struct CreateBudgetView: View {
        Section("分类") {
          Picker("分类 (可选)", selection: $categoryId) {
            Text("总预算").tag(nil as Int?)
-           ForEach(store.flattenedCategories.filter { $0.level == 1 && $0.flowType == .expense }) { category in
-             Text(category.tag).tag(Int?(category.id))
+           ForEach(topLevelExpenseCategories) { category in
+             Text(category.name).tag(Int?(category.id))
            }
          }
        }
@@ -233,6 +234,14 @@ private struct CreateBudgetView: View {
    }
  }
 
+ private var topLevelExpenseCategories: [LedgerCategory] {
+   store.flattenedCategories.filter { $0.level == 1 && $0.flowType == .expense }
+ }
+
+ private var categoryName: String? {
+   store.flattenedCategories.first(where: { $0.id == categoryId })?.name
+ }
+
  private func createBudget() {
    guard let limit = Double(amount) else { return }
    let monthComponents = Calendar.current.dateComponents([.year, .month], from: targetMonth)
@@ -240,11 +249,11 @@ private struct CreateBudgetView: View {
      name: name.isEmpty ? "新增预算" : name,
      limitAmount: limit,
      periodType: budgetMode.periodType,
-     categoryId: categoryId,
-     startDate: budgetMode == .range ? startDate : Date(),
-     year: budgetMode == .monthlyUnlimited ? monthComponents.year ?? Calendar.current.component(.year, from: Date()) : nil,
+     year: monthComponents.year ?? Calendar.current.component(.year, from: Date()),
      month: budgetMode == .monthlyUnlimited ? monthComponents.month ?? Calendar.current.component(.month, from: Date()) : nil,
-     endDate: budgetMode == .range && hasEndDate ? endDate : nil
+     startDate: budgetMode == .range ? startDate : nil,
+     endDate: budgetMode == .range && hasEndDate ? endDate : nil,
+     categoryId: categoryId
    )
 
    Task {
@@ -252,10 +261,6 @@ private struct CreateBudgetView: View {
      dismiss()
    }
  }
-}
-
-private var categoryName: String? {
- store.flattenedCategories.first(where: { $0.id == categoryId })?.name
 }
 
 enum BudgetMode: String, CaseIterable, Identifiable {

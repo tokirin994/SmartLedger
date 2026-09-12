@@ -15,7 +15,7 @@ struct ImportReceiptView: View {
     
     var body: some View {
         NavigationStack {
-            ScrollView(spacing: 16) {
+            ScrollView(.vertical) {
                 SectionCard(title: "导入截图") {
                     PhotosPicker(selection: $selectedItem, matching: .images) {
                         Label("选择截图", systemImage: "photo.on.rectangle")
@@ -37,7 +37,9 @@ struct ImportReceiptView: View {
         .background(Color.black.opacity(0.72), in: Capsule())
         .foregroundStyle(.white)
         .padding(10)
-    }
+                            }
+                    }
+                }
     
     if isRecognizing {
         ProgressView("正在识别截图...")
@@ -51,13 +53,15 @@ struct ImportReceiptView: View {
         }
     }
 
-    if store.parsedImportItems.count > 1 {
-        batchImportSection
-    } else if let parsed = store.parsedImport {
-        singleImportSection(parsed: parsed)
-    } else if selectedImage != nil, !isRecognizing, !recognizedText.isEmpty {
-        SectionCard(title: "未解析出结构化账单") {
-            EmptyView()
+    Group {
+        if store.parsedImportItems.count > 1 {
+            batchImportSection
+        } else if let parsed = store.parsedImport {
+            singleImportSection(parsed: parsed)
+        } else if selectedImage != nil, !isRecognizing, !recognizedText.isEmpty {
+            SectionCard(title: "未解析出结构化账单") {
+                EmptyView()
+            }
         }
     }
     .padding()
@@ -68,6 +72,8 @@ struct ImportReceiptView: View {
     guard let newValue else { return }
     Task { await loadImage(from: newValue) }
 }
+        }
+    }
 
 private var batchImportSection: some View {
     SectionCard(title: "批量识别结果") {
@@ -101,7 +107,7 @@ private var batchImportSection: some View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Text(item.categoryPath.isEmpty ? "未分类" : item.categoryPath.joined(separator: " / "))
+                            Text((item.categoryPath ?? []).isEmpty ? "未分类" : (item.categoryPath ?? []).joined(separator: " / "))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -139,7 +145,7 @@ private func singleImportSection(parsed: OCRImportResult) -> some View {
     SectionCard(title: "结构化结果") {
         VStack(alignment: .leading, spacing: 10) {
             LabeledContent("金额", value: (parsed.amount ?? 0).cnyText)
-            LabeledContent("类型", value: parsed.kind.title)
+            LabeledContent("类型", value: (parsed.kind ?? .expense).title)
             LabeledContent("标题", value: parsed.title ?? "—")
             LabeledContent("商户", value: parsed.merchant ?? "—")
             LabeledContent("支付路径", value: parsed.paymentMethod ?? "—")
@@ -150,12 +156,12 @@ private func singleImportSection(parsed: OCRImportResult) -> some View {
             if let discount = parsed.discountAmount {
                 LabeledContent("优惠", value: discount.cnyText)
             }
-            LabeledContent("分类", value: parsed.categoryPath.joined(separator: " / "))
-            LabeledContent("置信度", value: "\((parsed.confidence * 100).formatted(.number.precision(.fractionLength(0))))%")
+            LabeledContent("分类", value: (parsed.categoryPath ?? []).joined(separator: " / "))
+            LabeledContent("置信度", value: "\(((parsed.confidence ?? 0) * 100).formatted(.number.precision(.fractionLength(0))))%")
 
-            if !parsed.details.isEmpty {
+            if !(parsed.details ?? []).isEmpty {
                 Divider()
-                ForEach(parsed.details) { item in
+                ForEach(parsed.details ?? []) { item in
                     LabeledContent(item.label, value: item.value)
                 }
             }
@@ -256,7 +262,7 @@ private func applyParsedDefaults(parsed: OCRImportResult) {
 }
 
 private func applyParsedCategorySuggestion(parsed: OCRImportResult) {
-    guard let matched = store.findCategory(bySuggestedPath: parsed.categoryPath), matched.flowType == draft.kind else {
+    guard let matched = store.findCategory(bySuggestedPath: parsed.categoryPath ?? []), matched.flowType == draft.kind else {
         return
     }
     draft.categoryId = matched.id
@@ -286,7 +292,7 @@ private func saveSelectedBatchItems() async {
         if !draft.paymentMethod.isEmpty {
             draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
         }
-        if let matched = store.findCategory(bySuggestedPath: item.categoryPath), matched.flowType == draft.kind {
+        if let matched = store.findCategory(bySuggestedPath: item.categoryPath ?? []), matched.flowType == draft.kind {
             draft.categoryId = matched.id
         }
         await store.createTransaction(draft)
@@ -326,3 +332,4 @@ private struct PaymentChannelPickerCard: View {
     }
 }
 
+}

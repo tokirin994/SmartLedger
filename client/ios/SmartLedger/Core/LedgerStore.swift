@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 
 @MainActor
@@ -625,7 +626,7 @@ final class LedgerStore: ObservableObject {
     guard book.autoCollectEnabled, matchesBookDateRange(book, date: date) else { return false }
     guard !book.autoCollectCategoryIds.isEmpty else { return true }
     guard let categoryId else { return false }
-    return matchesAutoCollectCategory(book, transactionCategoryId: categoryId)
+    return matchesAutoCollectCategory(book: book, transactionCategoryId: categoryId)
   }
 
   func useLocalForSyncConflict() async {
@@ -666,7 +667,7 @@ final class LedgerStore: ObservableObject {
     }
 
     func dailySummaries(for month: Date, from transactions: [LedgerTransaction]) -> [Date: DailyFinanceSummary] {
-        let interval = calendar.dateInterval(of: .month, for: month) ?? DateInterval(start: month, duration: 31 * 24 *
+        let interval = calendar.dateInterval(of: .month, for: month) ?? DateInterval(start: month, duration: 31 * 24 * 60 * 60)
 
         let filtered = transactions.filter { interval.contains($0.happenedAt) }
         let grouped = Dictionary(grouping: filtered) { calendar.startOfDay(for: $0.happenedAt) }
@@ -689,7 +690,7 @@ final class LedgerStore: ObservableObject {
             let formatter = PersonNameComponentsFormatter()
             let fullName = credential.fullName.flatMap { formatter.string(from: $0) }.flatMap { $0.isEmpty ? nil : $0 }
             let profile = AppleAccountProfile(
-                userIdentifier: credential.userIdentifier,
+                userIdentifier: credential.user,
                 fullName: fullName ?? appleProfile?.fullName,
                 email: credential.email ?? appleProfile?.email,
                 authorizedAt: Date()
@@ -736,8 +737,7 @@ final class LedgerStore: ObservableObject {
                 let interval = abs(remoteSnapshot.updatedAt.timeIntervalSince(localSnapshot.updatedAt))
                 let localTransactionsData = try? JSONEncoder.iso8601.encode(localSnapshot.transactions)
                 let remoteTransactionsData = try? JSONEncoder.iso8601.encode(remoteSnapshot.transactions)
-                let diverged = remoteSnapshot.updatedAt != localSnapshot.updatedAt && localTransactionsData !=
-eTransactionsData
+                let diverged = remoteSnapshot.updatedAt != localSnapshot.updatedAt && localTransactionsData != remoteTransactionsData
 
                 if diverged && interval < 300 {
                     pendingRemoteSnapshot = remoteSnapshot
@@ -871,8 +871,7 @@ eTransactionsData
 
     private func refreshDerivedData() {
         books = recomputeBookSummaries(from: books, transactions: transactions)
-        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories,
-ts: budgets)
+        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets)
     }
 
     private func recomputeBookSummaries(from books: [LedgerBook], transactions: [LedgerTransaction]) -> [LedgerBook] {
@@ -934,8 +933,7 @@ ts: budgets)
         if !explicitlySelectedIds.isEmpty {
             return books.filter { explicitlySelectedIds.contains($0.id) }
         }
-        let autoCollected = recommendedBooks(for: draft.happenedAt).filter { shouldAutoCollect(into: $0, date:
-.happenedAt, categoryId: draft.categoryId) }
+        let autoCollected = recommendedBooks(for: draft.happenedAt).filter { shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId) }
         guard !autoCollected.isEmpty else {
             return []
         }
@@ -1060,6 +1058,7 @@ ts: budgets)
             lastSyncMessage = "已清理失效的 Apple 账号信息"
         }
     }
+}
 
 struct DailyFinanceSummary {
     let income: Double
@@ -1074,12 +1073,10 @@ private enum CategoryTreeBuilder {
         guard let parentId = node.parentId else { return tree + [node] }
         return tree.map { item in
             if item.id == parentId {
-                return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color:
-color, parentId: item.parentId, level: item.level, children: item.children + [node])
+                return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: item.children + [node])
             }
             guard !item.children.isEmpty else { return item }
-            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color:
-color, parentId: item.parentId, level: item.level, children: insert(node, into: item.children))
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: insert(node, into: item.children))
         }
     }
 }

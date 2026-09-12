@@ -102,7 +102,7 @@ private struct MoreHubView: View {
         NavigationStack(path: $navPath) {
             List {
                 NavigationLink {
-                    BudgetsView()
+                    BudgetView()
                 } label: {
                     Label("预算", systemImage: "creditcard")
                 }

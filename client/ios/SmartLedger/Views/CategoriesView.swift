@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct CategoriesView: View {
     @EnvironmentObject private var store: LedgerStore
@@ -27,7 +28,7 @@ struct CategoriesView: View {
 
                 List {
                     ForEach(filteredRoots) { category in
-                        CategoryRowView(category: category)
+                        CategoryNodeView(category: category)
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -68,9 +69,7 @@ struct CategoriesView: View {
     }
 
     private var filteredCount: Int {
-        filteredRoots.reduce(0) { partial, category in
-            partial + category.flattened.count
-        }
+        filteredRoots.map { $0.flattened().count }.reduce(0, +)
     }
 
     private func categoryMatches(_ category: LedgerCategory) -> Bool {
@@ -140,8 +139,10 @@ struct CategoryEditorView: View {
                         title: "上级分类",
                         categories: store.categories.filter { $0.flowType == flowType },
                         placeholder: "作为一级分类",
+                        helperText: nil,
                         selectedCategoryId: $parentId,
-                        flowType: flowType
+                        flowType: flowType,
+                        onCreateCategory: nil
                     )
                 }
 
@@ -230,11 +231,9 @@ struct CategoryEditorView: View {
                                 parentId: parentId
                             )
                             await store.createCategory(draft)
-                            if let created = store.flattenedCategories.first(where: {
-                                $0.name == name.trimmingCharacters(in: .whitespacesAndNewlines) &&
-                                $0.flowType == flowType &&
-                                $0.parentId == parentId
-                            }) {
+                            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let candidates = store.flattenedCategories.filter { $0.name == trimmedName }
+                            if let created = candidates.first(where: { $0.flowType == flowType && $0.parentId == parentId }) {
                                 onCreated?(created)
                             }
                             dismiss()
@@ -263,7 +262,7 @@ struct CategoryEditorView: View {
                 } label: {
                     ZStack {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(selected.wrappedValue == option ? previewColor.opacity(0.16) : Color.systemBackground)
+                            .fill(selected.wrappedValue == option ? previewColor.opacity(0.16) : Color(UIColor.systemBackground))
                         Image(systemName: option)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(selected.wrappedValue == option ? previewColor : .primary)
@@ -289,7 +288,7 @@ struct CategoryEditorView: View {
                     selected.wrappedValue = option
                 } label: {
                     Circle()
-                        .fill(swatchColor)
+                        .fill(Color(hex: option))
                         .frame(width: 28, height: 28)
                         .overlay(
                             Circle()
@@ -329,7 +328,7 @@ private struct CategoryNodeView: View {
             }
         }
         .padding(12)
-        .background(Color.secondarySystemBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func row(for item: LedgerCategory) -> some View {
@@ -361,7 +360,7 @@ private struct CategoryNodeView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.tertiarySystemBackground, in: Capsule())
+                    .background(Color(UIColor.tertiarySystemBackground), in: Capsule())
             }
         }
         .padding(.vertical, 1)
@@ -374,31 +373,4 @@ private struct CreateCategoryView: View {
     }
 }
 
-private extension Color {
-    init(hex: String) {
-        var cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: cleaned).scanHexInt64(&int)
-
-        let r, g, b: UInt64
-        switch cleaned.count {
-        case 3:
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6:
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8:
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            (a, r, g, b) = (255, 24, 144, 255)
-        }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: Double(a) / 255
-        )
-    }
-}
 

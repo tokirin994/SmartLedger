@@ -310,6 +310,10 @@ struct AppBackdrop: View {
 }
 
 extension View {
+    func appBackground() -> some View {
+        background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
     func appBackdrop() -> some View {
         background(AppBackdrop())
     }

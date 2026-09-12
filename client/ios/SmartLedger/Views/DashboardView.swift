@@ -1,42 +1,9 @@
 import SwiftUI
 import Charts
-import SwiftUI
 
 struct DashboardView: View {
-    @EnvironmentObject private var store: LedgerStore; @State private var range: DashboardRange = .month; @State private var showCalendar = false; @State private var var showBars = false
-    private var interval: DateInterval { range.interval() }
-    private var scoped: [LedgerTransaction] { store.transactions.filter { interval.contains($0.happenedAt) } }
-    private var expense: Double { Double( scoped.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount } ) }; private var income: Double { scoped.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount } }
-        HStack { Text("概览").font(.largeTitle.bold()); Spacer(); Button { showCalendar = true } label: {
-            Image(systemName: "calendar") }; Button { store.save() } label: { Image(systemName: "arrow.clockwise") }
-        }.padding(.horizontal)
-        VStack(alignment: .leading, spacing: 12) { Text("统计筛选").font(.headline); Text("\(interval.start.formatted(date: .numeric, time: .omitted)) – \(interval.end.addingTimeInterval(-1).formatted(date: .numeric, time: .omitted))").foregroundStyle(.secondary); HStack { ForEach(DashboardRange.allCases) { value in Button { range = value } label: {
-            FilterChip(title: value.title, selected: range == value) } }.padding(.horizontal) }
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) { DashboardMetricCard(title:
-"总支出", value: expense, color: .orange, icon: "arrow.up.right"); DashboardMetricCard(title: "总收入", value: income,
-color: .green, icon: "arrow.down.left"); DashboardMetricCard(title: "结余", value: income‑expense, color: .blue, icon:
-"banknote"); DashboardMetricCard(title: "预算剩余", value: max(0, store.budgets.reduce(0) { $0 + $1.limitAmount }‑
-expense), color: .purple, icon: "gauge") }.padding(.horizontal)
-        GlassCard { VStack(alignment: .leading, spacing: 12) { HStack { Text("分类占比").font(.title3.bold()); Spacer();
-Button($showBars ? "饼图" : "柱状图") { showBars.toggle() } }; CategoryChart(transactions: scoped, store: store, bars:
-showBars) }.padding(.horizontal) }
-        GlassCard { VStack(alignment: .leading, spacing: 12) { Text("收支趋势").font(.title3.bold()); TrendChart(transactions: scoped)
-}.padding(.horizontal) }
-        GlassCard { VStack(alignment: .leading, spacing: 8) { Text("预算摘要").font(.title3.bold()); ForEach(store.budgets) {
-budget in BudgetSummaryRow(budget: budget, spent: store.expense(in: interval, categoryID: budget.categoryID)) }
-}.padding(.horizontal) }
-    }.sheet(isPresented: $showCalendar) { FinanceCalendarSheet() }
-}.navigationBarTitleDisplayMode(.inline)
-}
-
-store.category($0.value.first?.categoryID)?.name ?? "未分类" }).map { ($0.key, $0.value.reduce(0) { $0 + $1.amount },
-store.category($0.value.first?.categoryID)?.color ?? .gray) }.sorted { $0.1 > $1.1 } }
-minHeight: 180) } else { Chart(data, id: \.0) { item in if bars { BarMark(x: .value("分类", item.0), y: .value("金额",
-item.1)).foregroundStyle(item.2) } else { SectorMark(angle: .value("金额", item.1), innerRadius:
-.ratio(0.55)).foregroundStyle(item.2).annotation(position: .overlay) { Text(item.0).font(.caption2) } }
-}.frame(height: 220) } }
-}
-@EnvironmentObject private var store: LedgerStore
+    @EnvironmentObject private var store: LedgerStore
+    @EnvironmentObject private var settings: AppSettings
 @Environment(\.colorScheme) private var colorScheme
 @State private var preset: OverviewPreset = .month
 @State private var showCalendarSheet = false
@@ -80,7 +47,7 @@ var body: some View {
         .sheet(isPresented: $showRangeSheet) {
             DashboardRangePickerSheet(
                 selectedPreset: $preset,
-                onSelectedPreset: { selected in
+                onSelectPreset: { selected in
                     preset = selected
                     Task { await reload() }
                 },
@@ -634,7 +601,7 @@ private var summaryGrid: some View {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: range.start)
         let end = calendar.startOfDay(for: range.end)
-        let days = max(calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
+        let days = max(calendar.dateComponents([.day], from: start, to: end).day ?? 0, 0) + 1
 
         if days <= 10 { return .day }
         if days <= 92 { return .week }
@@ -700,8 +667,9 @@ private struct DistributionDonutCalloutView: View {
    }
    .frame(maxWidth: .infinity, maxHeight: .infinity)
  }
- 
- private var segments: [DistributionSegment] {
+}
+
+  private var segments: [DistributionSegment] {
    var current = -90.0
    return items.map { item in
      let delta = item.ratio * 360
@@ -716,7 +684,7 @@ private struct DistributionDonutCalloutView: View {
      let points = rawCalloutPoints(for: segment, center: center, outerRadius: outerRadius)
      return RawCallout(
        item: segment.item,
-       start: points.item.start,
+       start: points.start,
        mid: points.mid,
        preferredY: points.preferredY,
        isRightSide: points.isRightSide
@@ -764,7 +732,7 @@ private struct DistributionDonutCalloutView: View {
      }
    }
  
-   return zip(sorted, ys.map { raw, resolvedY in
+   return zip(sorted, ys).map { raw, resolvedY in
      let end = CGPoint(x: endX, y: resolvedY)
      let labelCenter = CGPoint(x: endX + (raw.isRightSide ? (labelWidth / 2 + 6) : -(labelWidth / 2 + 6)), y: resolvedY)
      return DonutCalloutLayout(
@@ -775,7 +743,7 @@ private struct DistributionDonutCalloutView: View {
        labelCenter: labelCenter,
        isRightSide: raw.isRightSide
      )
-   })
+   }
  }
  
  private func rawCalloutPoints(for segment: DistributionSegment, center: CGPoint, outerRadius: CGFloat) -> (start: CGPoint, mid: CGPoint, preferredY: CGFloat, isRightSide: Bool) {
@@ -795,11 +763,12 @@ private struct DistributionDonutCalloutView: View {
    return (start, mid, mid.y, isRightSide)
  }
  
- private func percentText(for item: DistributionPoint) -> String {
-   String(format: "%.1f%%", item.ratio * 100)
- }
- 
- +private struct ScrollableDistributionBarChart: View {
+  private func percentText(for item: DistributionPoint) -> String {
+    String(format: "%.1f%%", item.ratio * 100)
+  }
+}
+
+private struct ScrollableDistributionBarChart: View {
    let items: [DistributionPoint]
    let yDomain: ClosedRange<Double>
    let yTicks: [YAxisTickItem]
@@ -839,9 +808,7 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
-   var body: some View { VStack(alignment: .leading) { HStack { Text(budget.name); Spacer(); Text("\(spent.currency) / \(min(spent/budget.limitAmount, 1)).tint(spent > budget.limitAmount ? .red : .blue) } }
- }
- private struct FixedYAxisScrollableChart<Content: View>: View {
+private struct FixedYAxisScrollableChart<Content: View>: View {
    let itemCount: Int
    let minimumSlotWidth: CGFloat
    let height: CGFloat
@@ -906,19 +873,19 @@ private struct DistributionDonutCalloutView: View {
      }
    }
  }
- +private enum FixedYAxisStyle {
+private enum FixedYAxisStyle {
    case compact
    case regular
- +}
+}
  
- +private struct YAxisTickItem: Identifiable {
+private struct YAxisTickItem: Identifiable {
    let value: Double
    let label: String
  
    var id: String { label + value.formatted(.number.precision(.fractionLength(2))) }
  }
  
- +private struct FixedYAxisLabelsView: View {
+private struct FixedYAxisLabelsView: View {
    let domain: ClosedRange<Double>
    let ticks: [YAxisTickItem]
    let style: FixedYAxisStyle
@@ -989,14 +956,14 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
- +private struct LegendDisplayItem: Identifiable {
+private struct LegendDisplayItem: Identifiable {
    let title: String
    let color: Color
  
    var id: String { title }
  }
  
- +private struct CompactLegendView: View {
+private struct CompactLegendView: View {
    let items: [LegendDisplayItem]
  
    var body: some View {
@@ -1043,21 +1010,21 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
- +private struct DistributionSegment {
+private struct DistributionSegment {
    let item: DistributionPoint
    let startAngle: Angle
    let endAngle: Angle
- +}
+}
  
- +private struct RawCallout {
+private struct RawCallout {
    let item: DistributionPoint
    let start: CGPoint
    let mid: CGPoint
    let preferredY: CGFloat
    let isRightSide: Bool
- +}
+}
  
- +private struct DonutCalloutLayout: Identifiable {
+private struct DonutCalloutLayout: Identifiable {
    let item: DistributionPoint
    let start: CGPoint
    let mid: CGPoint
@@ -1066,9 +1033,9 @@ private struct DistributionDonutCalloutView: View {
    let isRightSide: Bool
  
    var id: String { item.id }
- +}
+}
  
- +private struct DonutSliceShape: Shape {
+private struct DonutSliceShape: Shape {
    let startAngle: Angle
    let endAngle: Angle
    let innerRadiusRatio: CGFloat
@@ -1086,7 +1053,7 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
- +private extension Double {
+private extension Double {
    var cnyShortText: String {
      let sign = self < 0 ? "-" : ""
      let value = abs(self)
@@ -1112,7 +1079,7 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
- +private extension DistributionPoint {
+private extension DistributionPoint {
    var displayColor: Color {
      if let color {
        return Color(hex: color)
@@ -1121,35 +1088,8 @@ private struct DistributionDonutCalloutView: View {
    }
  }
  
- +private extension Color {
-   init(hex: String) {
-     let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-     var int: UInt64 = 0
-     Scanner(string: cleaned).scanHexInt64(&int)
  
-     let a, r, g, b: UInt64
-     switch cleaned.count {
-     case 3:
-       (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-     case 6:
-       (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-     case 8:
-       (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-     default:
-       (a, r, g, b) = (255, 24, 144, 255)
-     }
- 
-     self.init(
-       .sRGB,
-       red: Double(r) / 255,
-       green: Double(g) / 255,
-       blue: Double(b) / 255,
-       opacity: Double(a) / 255
-     )
-   }
- }
- 
- +private enum OverviewPreset: String, CaseIterable, Identifiable {
+private enum OverviewPreset: String, CaseIterable, Identifiable {
    case week
    case month
    case year
@@ -1315,6 +1255,8 @@ private func defaultTitle(for range: CustomDateRange) -> String {
 
 private func rangeText(_ range: CustomDateRange) -> String {
     defaultTitle(for: range)
+}
+
 }
 
 private struct FinanceCalendarSheet: View {
@@ -1505,7 +1447,7 @@ private struct FinanceCalendarSheet: View {
         let summary = dailySummaries[selectedDate] ?? DailyFinanceSummary(income: 0, expense: 0)
         
         return SectionCard(
-            title: selectedDate.formatted(.dateTime.complete, time: .omitted),
+            title: selectedDate.formatted(date: .complete, time: .omitted),
             subtitle: "查看当天收入、支出和结余"
         ) {
             HStack(spacing: 12) {
@@ -1636,5 +1578,35 @@ private extension Double {
             return String(format: "%.1fk", self / 1000)
         }
         return String(format: "%.0f", self)
+    }
+}
+
+
+struct BudgetStatusCard: View {
+    let item: BudgetItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(item.name)
+                    .font(.headline)
+                Spacer()
+                Text("\(item.spentAmount.cnyText) / \(item.limitAmount.cnyText)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            ProgressView(value: min(max(item.usageRatio, 0), 1))
+            HStack {
+                Text(item.categoryName ?? "全部消费")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("已用 \((item.usageRatio * 100).formatted(.number.precision(.fractionLength(0))))%")
+                    .font(.caption)
+                    .foregroundStyle(item.usageRatio >= 1 ? .red : .secondary)
+            }
+        }
+        .padding(14)
+        .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
     }
 }
