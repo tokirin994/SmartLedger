@@ -213,8 +213,8 @@ private struct CreateBudgetView: View {
        Section("分类") {
          Picker("分类 (可选)", selection: $categoryId) {
            Text("总预算").tag(nil as Int?)
-           ForEach(topLevelExpenseCategories) { category in
-             Text(category.name).tag(Int?(category.id))
+           ForEach(budgetCategoryOptions) { category in
+             Text(category.displayName).tag(Int?(category.id))
            }
          }
        }
@@ -234,8 +234,8 @@ private struct CreateBudgetView: View {
    }
  }
 
- private var topLevelExpenseCategories: [LedgerCategory] {
-   store.flattenedCategories.filter { $0.level == 1 && $0.flowType == .expense }
+ private var budgetCategoryOptions: [LedgerCategory] {
+   store.flattenedCategories.filter { $0.flowType == .expense && $0.level <= 1 }.sorted { $0.displayName < $1.displayName }
  }
 
  private var categoryName: String? {

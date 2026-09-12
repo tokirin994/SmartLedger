@@ -26,7 +26,7 @@ enum DisplayPalette {
         "cross.case.fill", "stethoscope", "pills.fill", "bandage.fill",
         "heart.fill", "figure.run", "dumbbell.fill", "soccerball.inverse",
         "gift.fill", "party.popper.fill", "sparkles", "camera.fill",
-        "leaf.fill", "fish.fill", "cat.fill", "dog.fill",
+        "leaf.fill", "fish.fill", "cat.fill", "pawprint.fill",
         "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill",
         "text.fill",
         "book.fill", "books.vertical.fill", "graduationcap.fill", "doc.text.fill",

@@ -20,6 +20,7 @@ var body: some View {
                 summaryGrid
                 distributionSection
                 trendSection
+                categoryTrendSection
                 budgetsSection
             }
         }
@@ -64,11 +65,10 @@ var body: some View {
             .environmentObject(settings)
         }
         .task {
-            if store.overview == nil {
-                store.activeRangePreset = preset.dateRangePreset
-                store.activeGranularity = preset.defaultGranularity
-                await store.bootstrapIfNeeded()
-            }
+            store.activeRangePreset = preset.dateRangePreset
+            store.activeGranularity = preset.defaultGranularity
+            await store.bootstrapIfNeeded()
+            await reload()
         }
         .refreshable {
             await reload()
@@ -1624,3 +1624,4 @@ struct BudgetStatusCard: View {
         .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
     }
 }
+
