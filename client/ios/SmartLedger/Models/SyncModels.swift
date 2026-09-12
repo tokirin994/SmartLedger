@@ -11,11 +11,11 @@ enum CloudAccountStatus: String, Codable, Sendable {
     var title: String {
         switch self {
         case .unknown: return "未知"
-        case .available: return "可用"
-        case .noAccount: return "未登录 iCloud"
-        case .restricted: return "受限制"
+        case .available: return "可连接"
+        case .noAccount: return "未配置或认证失败"
+        case .restricted: return "访问受限"
         case .temporarilyUnavailable: return "暂不可用"
-        case .couldNotDetermine: return "无法判断"
+        case .couldNotDetermine: return "无法连接"
         }
     }
 }

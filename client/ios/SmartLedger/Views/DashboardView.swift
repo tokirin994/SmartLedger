@@ -866,12 +866,15 @@ private struct FixedYAxisScrollableChart<Content: View>: View {
  
    private var axisWidth: CGFloat {
      let longest = yTicks.map { $0.label.count }.max() ?? 4
-     let estimated = CGFloat(longest) * 6.2 + 10
+     // Keep a real column for the fixed axis. Currency labels such as
+     // "¥38.2k" were previously squeezed into a 42pt column and could be
+     // clipped altogether when the chart was inside a scroll view.
+     let estimated = CGFloat(longest) * 7.0 + 18
      switch axisStyle {
      case .compact:
-       return min(max(estimated, 42), 52)
+       return min(max(estimated, 66), 82)
      case .regular:
-       return min(max(estimated, 48), 60)
+       return min(max(estimated, 72), 92)
      }
    }
  
@@ -903,26 +906,29 @@ private struct FixedYAxisLabelsView: View {
      GeometryReader { geometry in
        let plotHeight = max(geometry.size.height - topInset - bottomInset, 1)
  
-       ZStack(alignment: .topTrailing) {
+       ZStack(alignment: .topLeading) {
          Rectangle()
            .fill(Color.clear)
  
          ForEach(ticks) { tick in
            let ratio = normalizedRatio(for: tick.value)
            let rawY = topInset + (1 - ratio) * plotHeight
-           let clampedY = min(max(rawY, labelHeight / 2), geometry.size.height - bottomInset)
+           let lowerBound = topInset + labelHeight / 2
+           let upperBound = max(lowerBound, geometry.size.height - bottomInset - labelHeight / 2)
+           let clampedY = min(max(rawY, lowerBound), upperBound)
  
            HStack(spacing: 4) {
              Text(tick.label)
                .font(.caption2)
                .foregroundStyle(.secondary)
                .lineLimit(1)
-               .minimumScaleFactor(0.72)
+               .minimumScaleFactor(0.8)
  
              Rectangle()
                .fill(Color.secondary.opacity(0.25))
                .frame(width: stubWidth, height: 1)
            }
+           .frame(width: geometry.size.width, alignment: .leading)
            .position(x: geometry.size.width / 2, y: clampedY)
          }
        }

@@ -739,7 +739,7 @@ final class LedgerStore: ObservableObject {
             return
         }
         guard cloudAccountStatus == .available else {
-            lastSyncMessage = "iCloud 当前不可用: \(cloudAccountStatus.title)"
+            lastSyncMessage = "坚果云当前不可用: \(cloudAccountStatus.title)"
             syncState = .idle
             return
         }
@@ -762,7 +762,7 @@ final class LedgerStore: ObservableObject {
                         localBookCount: localSnapshot.books.count,
                         remoteBookCount: remoteSnapshot.books.count
                     )
-                    lastSyncMessage = "检测到本地与 iCloud 同时有更新，请选择保留哪一份"
+                    lastSyncMessage = "检测到本地与坚果云同时有更新，请选择保留哪一份"
                     syncState = .conflict
                 } else if remoteSnapshot.updatedAt > localSnapshot.updatedAt {
                     apply(remoteSnapshot)
@@ -770,17 +770,17 @@ final class LedgerStore: ObservableObject {
                     localUpdatedAt = remoteSnapshot.updatedAt
                     try await localStore.save(remoteSnapshot)
                     lastSyncAt = Date()
-                    lastSyncMessage = "已从 iCloud 拉取最新数据"
+                    lastSyncMessage = "已从坚果云拉取最新数据"
                 } else if remoteSnapshot.updatedAt < localSnapshot.updatedAt {
                     let pushedSnapshot = currentSnapshot(markUpdatedAt: true)
                     try await cloudStore.pushSnapshot(pushedSnapshot)
                     try await localStore.save(pushedSnapshot)
                     localUpdatedAt = pushedSnapshot.updatedAt
                     lastSyncAt = Date()
-                    lastSyncMessage = "已将本地更新推送到 iCloud"
+                    lastSyncMessage = "已将本地更新推送到坚果云"
                 } else {
                     lastSyncAt = Date()
-                    lastSyncMessage = "本地与 iCloud 已一致"
+                    lastSyncMessage = "本地与坚果云已一致"
                 }
             } else {
                 let pushedSnapshot = currentSnapshot(markUpdatedAt: true)
@@ -788,13 +788,13 @@ final class LedgerStore: ObservableObject {
                 try await localStore.save(pushedSnapshot)
                 localUpdatedAt = pushedSnapshot.updatedAt
                 lastSyncAt = Date()
-                lastSyncMessage = "已初始化 iCloud 账本快照"
+                lastSyncMessage = "已初始化坚果云账本快照"
             }
             if syncState != .conflict {
                 syncState = .success
             }
         } catch {
-            errorMessage = "iCloud 同步失败: \(error.localizedDescription)"
+            errorMessage = "坚果云同步失败: \(error.localizedDescription)"
             lastSyncMessage = "同步失败"
             syncState = .failed
         }
@@ -819,7 +819,7 @@ final class LedgerStore: ObservableObject {
             apply(snapshot)
             localUpdatedAt = snapshot.updatedAt
             lastSyncAt = Date()
-            lastSyncMessage = "已手动推送到 iCloud"
+            lastSyncMessage = "已手动推送到坚果云"
             syncState = .success
         } catch {
             errorMessage = "推送失败: \(error.localizedDescription)"
@@ -837,7 +837,7 @@ final class LedgerStore: ObservableObject {
         }
         do {
             guard let remote = try await cloudStore.fetchSnapshot() else {
-                lastSyncMessage = "iCloud 还没有可拉取的数据"
+                lastSyncMessage = "坚果云还没有可拉取的数据"
                 syncState = .idle
                 return
             }
@@ -846,7 +846,7 @@ final class LedgerStore: ObservableObject {
             try await localStore.save(remote)
             localUpdatedAt = remote.updatedAt
             lastSyncAt = Date()
-            lastSyncMessage = "已从 iCloud 拉取最新数据"
+            lastSyncMessage = "已从坚果云拉取最新数据"
             syncState = .success
             await refreshDashboard(range: activeRangePreset, granularity: activeGranularity)
         } catch {
@@ -858,7 +858,7 @@ final class LedgerStore: ObservableObject {
     func setCloudSyncEnabled(_ enabled: Bool) async {
         cloudSyncEnabled = enabled
         if enabled {
-            lastSyncMessage = "已开启云同步，准备检查 iCloud 状态"
+            lastSyncMessage = "已开启坚果云同步，准备检查 WebDAV 状态"
             await smartSync(showSuccessMessage: false)
         } else {
             syncState = .idle
