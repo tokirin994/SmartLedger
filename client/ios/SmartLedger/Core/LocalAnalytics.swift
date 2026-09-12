@@ -135,9 +135,11 @@ enum LocalAnalytics {
       // selected root; otherwise every category's second path component (for
       // example another root's “零食”) is accidentally rendered here.
       guard path.first == rootCategory.name else { continue }
-      guard path.count >= 2 else { continue }
+      // A first-level leaf has no child rows, but it is still a valid
+      // selector item. Render its own transactions as one distribution item.
+      guard path.count >= 2 || !hasChildren else { continue }
 
-      let childName = path.count == 2 ? path[1] : (hasChildren ? "未分类" : rootCategory.name)
+      let childName = path.count >= 2 ? path[1] : rootCategory.name
       // A selected primary category is intentionally rendered as one hue
       // family, so the detailed donut/bar chart remains visually connected to
       // the same primary category used elsewhere on the dashboard.

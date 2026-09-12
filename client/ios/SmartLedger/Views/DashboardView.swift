@@ -410,8 +410,7 @@ private var summaryGrid: some View {
         store.flattenedCategories
             .filter { category in
                 category.parentId == nil &&
-                category.flowType == .expense &&
-                store.flattenedCategories.contains { $0.parentId == category.id }
+                category.flowType == .expense
             }
             .sorted { $0.id < $1.id }
     }
@@ -1701,3 +1700,9 @@ struct BudgetStatusCard: View {
         .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
     }
 }
+/*
+      .padding(14)
+        .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
+    }
+}
+*/
