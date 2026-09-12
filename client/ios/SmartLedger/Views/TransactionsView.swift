@@ -17,7 +17,7 @@ struct TransactionsView: View {
 
    var body: some View {
 
-        NavigationStack(path: $navPath) {
+        NavigationStack {
             Group {
                 if filteredTransactions.isEmpty {
                     ContentUnavailableView(
@@ -64,7 +64,12 @@ struct TransactionsView: View {
                     .appBackground()
                 }
             }
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("流水")
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) { Button { Task { await reloadTransactions() } } label: { Image(systemName: "arrow.clockwise") } }
+                    ToolbarItem(placement: .topBarTrailing) { Button { showCreateSheet = true } label: { Image(systemName: "plus") } }
+                }
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: 10) {
                         filterBar
@@ -208,132 +213,60 @@ struct TransactionsView: View {
  					.font(.subheadline.weight(.bold))
  					.foregroundStyle(tint)
 			}
- 			.frame(maxWidth: .infinity, alignment: .leading)
+ 			.frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
  			.padding(12)
  			.glassCard(cornerRadius: 18, strokeOpacity: 0.22)
  		}
 	}
-	@ViewBuilder
-	private func transactionListRow(_ tx: LedgerTransaction) -> some View {
-		Group {
-			transactionRow(tx)
-				.onTapGesture {
-					editingTransaction = tx
-				}
-			HStack(spacing: 8) {
-				Button("删除", role: .destructive) {
-					pendingDeleteTransaction = tx
-				}
-				Button("账本") {
-					quickBookTransaction = tx
-				}
-				.tint(.purple)
-				Button("分类") {
-					quickAssignTransaction = tx
-				}
-				.tint(.blue)
-			}
-		}
-	}
-	@ViewBuilder
-	private func transactionRow(_ tx: LedgerTransaction) -> some View {
-	HStack(alignment: .top, spacing: 14) {
- 		ZStack {
-			Circle()
- 				.fill(badgeColor(for: tx).opacity(0.14))
- 				.frame(width: 42, height: 42)
-			Image(systemName: categoryIcon(for: tx))
- 			Image(systemName: badgeIcon(for: tx))
- 				.font(.system(size: 18, weight: .semibold))
- 				.foregroundStyle(.white)
- 				.foregroundStyle(badgeColor(for: tx))
- 		}
- 		VStack(alignment: .leading, spacing: 6) {
-			Text(tx.title)
- 			VStack(alignment: .leading, spacing: 8) {
- 				HStack(alignment: .firstTextBaseline) {
- 					Text(tx.title)
- 						.font(.subheadline.weight(.semibold))
- 						.lineLimit(1)
- 					Spacer(minLength: 12)
- 					Text(signedAmountText(for: tx))
- 						.font(.headline.weight(.bold))
- 						.foregroundStyle(tx.kind == .income ? .green : .primary)
- 				}
- 				if tx.installmentMonths != nil {
-					Label("分期", systemImage: "repeat.circle")
-						.foregroundStyle(.orange)
- 				}
- 				ScrollView(.horizontal, showsIndicators: false) {
- 					HStack(spacing: 8) {
- 						infoPill(text: tx.categoryName ?? "未分类", systemImage: categoryIcon(for: tx))
- 						let bookNames = displayBookNames(for: tx)
- 						if !bookNames.isEmpty {
- 							Button {
- 								bookPopoverTransactionId = tx.id
- 							} label: {
- 								iconOnlyPill(systemImage: "books.vertical", trailingText: "...")
- 							}
- 							.buttonStyle(.plain)
- 							.popover(isPresented: Binding(
- 								get: { bookPopoverTransactionId == tx.id },
- 								set: { shown in
- 									if !shown, bookPopoverTransactionId == tx.id {
- 										bookPopoverTransactionId = nil
- 									}
- 								}
- 							), attachmentAnchor: .point(.bottom), arrowEdge: .bottom) {
- 								TransactionBooksPopover(bookNames: bookNames)
- 							}
- 						}
- 					}
- 				}
- 				if tx.source == "ocr" {
- 					infoPill(text: "OCR", systemImage: "camera.viewfinder", tint: .blue)
- 				}
- 				if tx.installmentMonths != nil {
- 					infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange)
- 				}
- 			}
- 		}
- 			HStack(spacing: 12) {
-	 				Label(tx.happenedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
-	 					.foregroundStyle(calendarMetadataForeground)
-	 					.padding(.horizontal, 8)
-	 					.padding(.vertical, 5)
-	 					.background(calendarMetadataBackground, in: Capsule())
-	 				if let merchant = tx.merchant, !merchant.isEmpty {
-	 					Label(merchant, systemImage: "storefront")
-	 						.lineLimit(1)
-	 						.font(.caption)
-	 						.foregroundStyle(.secondary)
-	 				}
-	 			}
- 			if let paymentMethod = tx.paymentMethod, !paymentMethod.isEmpty {
- 				ScrollView(.horizontal, showsIndicators: false) {
- 					HStack(spacing: 8) {
- 						infoPill(text: paymentMethod, systemImage: "creditcard.fill", tint: .teal)
- 					}
- 					.padding(.vertical, 1)
- 				}
- 			}
- 
- 			if tx.discountAmount != nil || tx.premiumAmount != nil || tx.originalAmount != nil {
- 				HStack(spacing: 10) {
- 					if let original = tx.originalAmount {
-						miniMetric(title: "原价", value: original.cnyText, tint: .secondary)
-					}
-					if let discount = tx.discountAmount {
-						miniMetric(title: "优惠", value: discount.cnyText, tint: .green)
-					}
-					if let premium = tx.premiumAmount {
-						miniMetric(title: "溢价", value: premium.cnyText, tint: .red)
-					}
- 				}
- 			}
-			
- 		}
-	}
+    private func transactionListRow(_ tx: LedgerTransaction) -> some View {
+        transactionRow(tx)
+            .contentShape(Rectangle())
+            .onTapGesture { editingTransaction = tx }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) { pendingDeleteTransaction = tx } label: { Label("删除", systemImage: "trash") }
+                Button { quickBookTransaction = tx } label: { Label("账本", systemImage: "books.vertical") }.tint(.purple)
+                Button { quickAssignTransaction = tx } label: { Label("分类", systemImage: "tag") }.tint(.blue)
+            }
+    }
+
+    private func transactionRow(_ tx: LedgerTransaction) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: categoryIcon(for: tx))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(badgeColor(for: tx))
+                .frame(width: 42, height: 42)
+                .background(badgeColor(for: tx).opacity(0.14), in: Circle())
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(tx.title).font(.headline).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(signedAmountText(for: tx)).font(.headline.weight(.bold)).foregroundStyle(tx.kind == .income ? .green : .primary)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        infoPill(text: tx.categoryName ?? "未分类", systemImage: "tag")
+                        if !displayBookNames(for: tx).isEmpty { infoPill(text: "…", systemImage: "books.vertical", tint: .purple) }
+                        if tx.source == "ocr" { infoPill(text: "OCR", systemImage: "camera.viewfinder", tint: .blue) }
+                        if tx.installmentMonths != nil { infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange) }
+                    }
+                }
+                HStack(spacing: 12) {
+                    Label(tx.happenedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
+                    if let merchant = tx.merchant, !merchant.isEmpty { Label(merchant, systemImage: "storefront").lineLimit(1) }
+                }.font(.caption).foregroundStyle(.secondary)
+                if let payment = tx.paymentMethod, !payment.isEmpty { infoPill(text: payment, systemImage: "creditcard.fill", tint: .teal) }
+                if tx.originalAmount != nil || tx.discountAmount != nil || tx.premiumAmount != nil {
+                    HStack(spacing: 14) {
+                        if let value = tx.originalAmount { miniMetric(title: "原价", value: value.cnyText, tint: .secondary) }
+                        if let value = tx.discountAmount { miniMetric(title: "优惠", value: value.cnyText, tint: .green) }
+                        if let value = tx.premiumAmount { miniMetric(title: "溢价", value: value.cnyText, tint: .red) }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
 
  	private func infoPill(text: String, systemImage: String, tint: Color = .secondary) -> some View {
  		Label(text, systemImage: systemImage)

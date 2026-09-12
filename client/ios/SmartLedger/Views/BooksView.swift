@@ -156,6 +156,7 @@ private struct BookEditorView: View {
     @State private var newMember = ""
     @State private var showAutoCollectSetup = false
     @State private var collectExistingNow = false
+    @State private var iconPickerExpanded = false
 
     init(book: LedgerBook?) {
         self.book = book
@@ -180,8 +181,21 @@ private struct BookEditorView: View {
                 Section("基本信息") {
                     TextField("账本名称", text: $name)
                     TextField("备注", text: $note)
-                    TextField("图标（SF Symbol）", text: $icon)
-                    TextField("颜色（Hex）", text: $color)
+                    Button { iconPickerExpanded.toggle() } label: {
+                        HStack { Image(systemName: icon).foregroundStyle(Color(hex: color)); VStack(alignment: .leading) { Text("图标"); Text(icon).font(.caption).foregroundStyle(.secondary) }; Spacer(); Image(systemName: iconPickerExpanded ? "chevron.up" : "chevron.down").foregroundStyle(.secondary) }
+                    }.buttonStyle(.plain)
+                    if iconPickerExpanded {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 10) {
+                            ForEach(DisplayPalette.icons, id: \.self) { option in Button { icon = option } label: { Image(systemName: option).frame(width: 32, height: 32).background(icon == option ? Color(hex: color).opacity(0.18) : Color.clear, in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain) }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("主题颜色").font(.caption).foregroundStyle(.secondary)
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 10) {
+                            ForEach(DisplayPalette.colors, id: \.self) { option in Button { color = option } label: { Circle().fill(Color(hex: option)).frame(width: 26, height: 26).overlay { if color == option { Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white) } } }.buttonStyle(.plain) }
+                        }
+                    }
+                    Text("图标和主题颜色仅影响界面展示，不影响记账逻辑。").font(.footnote).foregroundStyle(.secondary)
                     Toggle("置顶显示", isOn: $isPinned)
                 }
                 Section("账本期间") {
