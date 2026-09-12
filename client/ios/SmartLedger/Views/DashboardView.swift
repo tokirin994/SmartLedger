@@ -860,6 +860,8 @@ private struct FixedYAxisScrollableChart<Content: View>: View {
        }
        .frame(height: height)
      }
+     .frame(height: height)
+     .clipped()
    }
  
    private var axisWidth: CGFloat {
@@ -1624,4 +1626,3 @@ struct BudgetStatusCard: View {
         .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
     }
 }
-
