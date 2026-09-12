@@ -22,10 +22,11 @@ enum LocalAnalytics {
         periodEnd = interval.end
       }
 
-      let spent = transactions.filter { tx in
+      let isWithinConfiguredRange = (budget.startDate.map { periodEnd > $0 } ?? true) && (budget.endDate.map { periodStart <= $0 } ?? true)
+      let spent = isWithinConfiguredRange ? transactions.filter { tx in
         tx.kind == .expense && tx.happenedAt >= periodStart && tx.happenedAt < periodEnd &&
         matchBudgetCategory(tx: tx, budget: budget, categories: categories)
-      }.reduce(0.0) { $0 + $1.amount }
+      }.reduce(0.0) { $0 + $1.amount } : 0
 
       let ratio = budget.limitAmount > 0 ? spent / budget.limitAmount : 0
       return BudgetItem(

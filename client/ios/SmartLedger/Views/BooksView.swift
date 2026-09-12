@@ -76,7 +76,6 @@ private struct BookRow: View {
                 Text("流水 \(book.transactionCount) 笔 · 余额 \(book.balance.cnyText)").font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
         }.padding(.vertical, 5)
     }
 }
@@ -172,7 +171,7 @@ private struct BookEditorView: View {
         _hasDateRange = State(initialValue: book?.startDate != nil)
         _startDate = State(initialValue: book?.startDate ?? Date())
         _endDate = State(initialValue: book?.endDate ?? Date())
-        _members = State(initialValue: book?.participantNames ?? [])
+        _members = State(initialValue: book?.participantNames.isEmpty == false ? (book?.participantNames ?? []) : ["我"])
     }
 
     var body: some View {
@@ -208,7 +207,7 @@ private struct BookEditorView: View {
                 }
                 Section("自动归集") {
                     Toggle("自动归集范围内流水", isOn: Binding(get: { autoCollectEnabled }, set: { enabled in
-                        if enabled && !autoCollectEnabled { showAutoCollectSetup = true } else { autoCollectEnabled = enabled }
+                        if enabled && !hasDateRange { autoCollectEnabled = false } else if enabled && !autoCollectEnabled { showAutoCollectSetup = true } else { autoCollectEnabled = enabled }
                     }))
                     if autoCollectEnabled {
                         Text("仅匹配账本时间范围内的支出流水；未选分类表示全部分类。") .font(.caption).foregroundStyle(.secondary)

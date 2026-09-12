@@ -303,6 +303,7 @@ struct CategoryEditorView: View {
 }
 
 private struct CategoryNodeView: View {
+    @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
 
     var body: some View {
@@ -329,6 +330,9 @@ private struct CategoryNodeView: View {
         }
         .padding(12)
         .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contextMenu {
+            Button(role: .destructive) { Task { await store.deleteCategory(category.id) } } label: { Label("删除分类", systemImage: "trash") }
+        }
     }
 
     private func row(for item: LedgerCategory) -> some View {

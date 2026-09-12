@@ -199,14 +199,14 @@ private struct CreateBudgetView: View {
          }
          .pickerStyle(.segmented)
 
+         DatePicker(budgetMode == .monthlyUnlimited ? "开始月份" : "开始时间", selection: $startDate, displayedComponents: .date)
+         Toggle("设置结束时间", isOn: $hasEndDate)
+         if hasEndDate {
+           DatePicker("结束时间", selection: $endDate, in: startDate..., displayedComponents: .date)
+         }
          if budgetMode == .monthlyUnlimited {
-           DatePicker("目标月份", selection: $targetMonth, displayedComponents: .date)
-         } else {
-           DatePicker("开始时间", selection: $startDate, displayedComponents: .date)
-           Toggle("设置结束时间", isOn: $hasEndDate)
-           if hasEndDate {
-             DatePicker("结束时间", selection: $endDate, displayedComponents: .date)
-           }
+           Text("系统会把这条预算作为按月滚动模板，仅展示当前月；到下月自动按相同额度进入下一周期。")
+             .font(.footnote).foregroundStyle(.secondary)
          }
        }
 
@@ -250,9 +250,9 @@ private struct CreateBudgetView: View {
      limitAmount: limit,
      periodType: budgetMode.periodType,
      year: monthComponents.year ?? Calendar.current.component(.year, from: Date()),
-     month: budgetMode == .monthlyUnlimited ? monthComponents.month ?? Calendar.current.component(.month, from: Date()) : nil,
-     startDate: budgetMode == .range ? startDate : nil,
-     endDate: budgetMode == .range && hasEndDate ? endDate : nil,
+     month: nil,
+     startDate: startDate,
+     endDate: hasEndDate ? endDate : nil,
      categoryId: categoryId
    )
 

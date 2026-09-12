@@ -32,7 +32,7 @@ struct CreateTransactionView: View {
     private var suggestedBooks: [LedgerBook] {
         let selectedIds = Set(draft.bookIds)
         return store.recommendedBooks(for: draft.happenedAt).filter {
-            !selectedIds.contains($0.id) && store.shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId)
+            !selectedIds.contains($0.id) && ($0.autoCollectCategoryIds.isEmpty || $0.autoCollectCategoryIds.contains(draft.categoryId ?? -1))
         }
     }
 
@@ -225,7 +225,7 @@ struct CreateTransactionView: View {
 
         let participants = book.participants
         if !participants.contains(where: { $0.id == draft.paidByParticipantId }) {
-            draft.paidByParticipantId = participants.first?.id
+            draft.paidByParticipantId = participants.first(where: { $0.name == "我" })?.id ?? participants.first?.id
         }
 
         let validIds = Set(participants.map(\.id))
@@ -233,6 +233,10 @@ struct CreateTransactionView: View {
         if draft.splitParticipantIds.isEmpty {
             draft.splitParticipantIds = participants.map(\.id)
         }
+    }
+    .onChange(of: draft.bookIds) { _, ids in
+        let firstId = ids.first
+        if draft.bookId != firstId { draft.bookId = firstId }
     }
     .toolbar {
         ToolbarItem(placement: .topBarLeading) {

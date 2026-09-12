@@ -549,6 +549,19 @@ final class LedgerStore: ObservableObject {
     await persistAndMaybeSync(reason: "分类已保存")
   }
 
+  func deleteCategory(_ categoryId: Int) async {
+    guard let target = flattenedCategories.first(where: { $0.id == categoryId }) else { return }
+    let removedIDs = Set(target.flattened().map(\.id))
+    let fallback = selectableCategories.first { $0.flowType == target.flowType && $0.name.hasSuffix("未分类") && !removedIDs.contains($0.id) }
+    categories = CategoryTreeBuilder.removing(ids: removedIDs, from: categories)
+    transactions = transactions.map { transaction in
+      guard let id = transaction.categoryId, removedIDs.contains(id) else { return transaction }
+      return rebuildTransaction(transaction, bookId: transaction.bookId, bookName: transaction.bookName, bookIds: transaction.bookIds, bookNames: transaction.bookNames, categoryId: fallback?.id, categoryName: fallback?.name, replacingCategory: true)
+    }
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "分类已删除，相关流水已归入未分类")
+  }
+
   func appendExtendedDemoData() async {
     let existingBookNames = Set(books.map(\.name))
     let newBooks = DemoData.extendedBooks(startingAt: nextBookId)
@@ -958,7 +971,7 @@ final class LedgerStore: ObservableObject {
     }
 
     private func rebuildTransaction(_ tx: LedgerTransaction, bookId: Int?, bookName: String?, bookIds: [Int], bookNames:
-[String]) -> LedgerTransaction {
+[String], categoryId: Int? = nil, categoryName: String? = nil, replacingCategory: Bool = false) -> LedgerTransaction {
         LedgerTransaction(
             id: tx.id,
             title: tx.title,
@@ -970,8 +983,8 @@ final class LedgerStore: ObservableObject {
             paymentMethod: tx.paymentMethod,
             source: tx.source,
             currency: tx.currency,
-            categoryId: tx.categoryId,
-            categoryName: tx.categoryName,
+            categoryId: replacingCategory ? categoryId : tx.categoryId,
+            categoryName: replacingCategory ? categoryName : tx.categoryName,
             bookId: bookId,
             bookName: bookName,
             bookIds: bookIds,
@@ -1069,6 +1082,13 @@ struct DailyFinanceSummary {
 }
 
 private enum CategoryTreeBuilder {
+    static func removing(ids: Set<Int>, from tree: [LedgerCategory]) -> [LedgerCategory] {
+        tree.compactMap { item in
+            guard !ids.contains(item.id) else { return nil }
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: removing(ids: ids, from: item.children))
+        }
+    }
+
     static func insert(_ node: LedgerCategory, into tree: [LedgerCategory]) -> [LedgerCategory] {
         guard let parentId = node.parentId else { return tree + [node] }
         return tree.map { item in

@@ -245,7 +245,15 @@ struct TransactionsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         infoPill(text: tx.categoryName ?? "未分类", systemImage: "tag")
-                        if !displayBookNames(for: tx).isEmpty { infoPill(text: "…", systemImage: "books.vertical", tint: .purple) }
+                        let bookNames = displayBookNames(for: tx)
+                        if bookNames.count == 1 { infoPill(text: bookNames[0], systemImage: "books.vertical", tint: .purple) }
+                        else if bookNames.count > 1 {
+                            Button { bookPopoverTransactionId = tx.id } label: { infoPill(text: "…", systemImage: "books.vertical", tint: .purple) }
+                                .buttonStyle(.plain)
+                                .popover(isPresented: Binding(get: { bookPopoverTransactionId == tx.id }, set: { if !$0 { bookPopoverTransactionId = nil } })) {
+                                    TransactionBooksPopover(bookNames: bookNames)
+                                }
+                        }
                         if tx.source == "ocr" { infoPill(text: "OCR", systemImage: "camera.viewfinder", tint: .blue) }
                         if tx.installmentMonths != nil { infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange) }
                     }
