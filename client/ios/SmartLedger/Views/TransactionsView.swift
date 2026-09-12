@@ -125,140 +125,64 @@ struct TransactionsView: View {
     }
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    ForEach(FlowFilter.allCases) { filter in
-                        Button {
-                            selectedFlow = filter
-                        } label: {
-                            Text(filter.title)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(selectedFlow == filter ? .white : .primary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    selectedFlow == filter ? filter.tint : Color.white.opacity(0.18),
-                                    in: Capsule()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
+        HStack(spacing: 8) {
+            ForEach(FlowFilter.allCases) { flow in
+                Button { selectedFlow = flow } label: {
+                    Text(flow.title).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+                        .foregroundStyle(selectedFlow == flow ? .white : .primary)
+                        .background(selectedFlow == flow ? flow.tint : Color.secondary.opacity(0.12), in: Capsule())
+                }.buttonStyle(.plain)
             }
         }
+        .padding(6)
+        .glassCard(cornerRadius: 18, strokeOpacity: 0.18)
     }
 
     private var categoryFilterBar: some View {
-    
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Button("全部分类") {
-                        selectedCategoryId = nil
-                    }
-                    Menu {
-                        ForEach(TransactionDateScope.allCases) { scope in
-                            Button(scope.title) {
-                                selectedDateScope = scope
-                                if scope != .custom {
-                                    let range = scope.defaultDates
-                                    startDate = range.start
-                                    endDate = range.end
-                                }
-                            }
-                        }
-                    } label: {
-                        filterChip(title: selectedDateScope.title, systemImage: "calendar")
-                    }
-
-                    Spacer()
-
-                    Menu {
-                            Button("全部分类") {
-                                selectedCategoryId = nil
-                            }
-                            Divider()
-                            ForEach(categoryFilterOptions) { category in
-                                Button(category.name) {
-                                    selectedCategoryId = category.id
-                                }
-                            }
-                    } label: {
-                        HStack {
-                            Text(selectedCategoryTitle)
-                            Image(systemName: "line.3.horizontal.decrease.circle")
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    Text("时间范围")
-                    Text("时间跨度")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Picker("", selection: $selectedDateScope) {
-                        ForEach(TransactionDateScope.allCases, id: \.self) { scope in
-                            Text(scope.title).tag(scope)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Menu {
+                    ForEach(TransactionDateScope.allCases) { scope in
+                        Button(scope.title) {
+                            selectedDateScope = scope
+                            if scope != .custom { let dates = scope.defaultDates; startDate = dates.start; endDate = dates.end }
                         }
                     }
-                    Text(dateScopeSummary)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
+                } label: { filterChip(title: selectedDateScope.title, systemImage: "calendar") }
 
-                    Spacer()
-
-                    if selectedCategoryId != nil || selectedDateScope != .recent30Days {
-                        Button("重置") {
-                            selectedCategoryId = nil
-                            selectedDateScope = .recent30Days
-                            let range = TransactionDateScope.recent30Days.defaultDates
-                            startDate = range.start
-                            endDate = range.end
-                        }
+                Menu {
+                    Button("全部分类") { selectedCategoryId = nil }
+                    Divider()
+                    ForEach(categoryFilterOptions) { category in
+                        Button(category.displayName) { selectedCategoryId = category.id }
                     }
-                }
-                .pickerStyle(.segmented)
-                if selectedDateScope == .custom {
-                    DatePicker("", selection: $startDate, displayedComponents: .date)
+                } label: { filterChip(title: selectedCategoryTitle, systemImage: "line.3.horizontal.decrease.circle") }
+
+                Spacer(minLength: 0)
+                if selectedCategoryId != nil || selectedDateScope != .recent30Days {
+                    Button("重置") {
+                        selectedCategoryId = nil; selectedDateScope = .recent30Days
+                        let dates = TransactionDateScope.recent30Days.defaultDates; startDate = dates.start; endDate = dates.end
+                    }.font(.caption.weight(.semibold))
                 }
             }
-            .padding(12)
-            .glassCard(cornerRadius: 18, strokeOpacity: 0.22)
-            .onChange(of: selectedDateScope) { _, _ in
-                Task { await reloadTransactions() }
-            }
-            .onChange(of: selectedCategoryId) { _, _ in
-                Task { await reloadTransactions() }
-            }
-        }
-
-    private var customDateFilterBar: some View {
-        Group {
+            Text(dateScopeSummary).font(.caption).foregroundStyle(.secondary)
             if selectedDateScope == .custom {
-                HStack(spacing: 12) {
+                HStack {
                     DatePicker("开始", selection: $startDate, displayedComponents: .date)
-                        .labelsHidden()
-                    Text("至")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    DatePicker("", selection: $endDate, displayedComponents: .date)
-                    DatePicker("结束", selection: $endDate, displayedComponents: .date)
-                        .labelsHidden()
-                }
-                .glassCard(cornerRadius: 18, strokeOpacity: 0.22)
-                .onChange(of: startDate) { _, _ in
-                    Task { await reloadTransactions() }
- 		}
-        .onChange(of: endDate) { _, _ in
-            Task { await reloadTransactions() }
+                    DatePicker("结束", selection: $endDate, in: startDate..., displayedComponents: .date)
+                }.font(.caption)
+            }
         }
+        .padding(12)
+        .glassCard(cornerRadius: 18, strokeOpacity: 0.18)
+        .onChange(of: selectedDateScope) { _, _ in Task { await reloadTransactions() } }
+        .onChange(of: selectedCategoryId) { _, _ in Task { await reloadTransactions() } }
+        .onChange(of: startDate) { _, _ in if selectedDateScope == .custom { Task { await reloadTransactions() } } }
+        .onChange(of: endDate) { _, _ in if selectedDateScope == .custom { Task { await reloadTransactions() } } }
     }
-        }
-    }
+
+    private var customDateFilterBar: some View { EmptyView() }
 
 	private var summaryHeader: some View {
 		Section {

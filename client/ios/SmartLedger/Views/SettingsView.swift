@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @State private var cloudEnabled = false
     @State private var newChannel = ""
+    @State private var demoMessage: String?
 
     var body: some View {
         Form {
@@ -67,11 +68,19 @@ struct SettingsView: View {
             }
 
             Section("开发辅助") {
-                Button("生成一批模拟数据") { Task { await store.appendExtendedDemoData() } }
-                    .disabled(store.isLoading || store.syncState == .syncing)
+                Button("生成一批模拟数据") {
+                    Task {
+                        await store.appendExtendedDemoData()
+                        demoMessage = store.errorMessage ?? "已生成模拟账本与 10 笔模拟流水"
+                    }
+                }
+                .disabled(store.isLoading || store.syncState == .syncing)
             }
         }
         .navigationTitle("设置")
         .task { cloudEnabled = store.cloudSyncEnabled }
+        .alert("模拟数据", isPresented: Binding(get: { demoMessage != nil }, set: { if !$0 { demoMessage = nil } })) {
+            Button("知道了", role: .cancel) {}
+        } message: { Text(demoMessage ?? "") }
     }
 }
