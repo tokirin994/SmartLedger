@@ -607,6 +607,10 @@ final class LedgerStore: ObservableObject {
       return
     }
     let parent = flattenedCategories.first(where: { $0.id == draft.parentId })
+    guard parent?.level ?? 0 < 2 else {
+      errorMessage = "二级分类已是最终分类，请选择一级分类作为上级。"
+      return
+    }
     let level = (parent?.level ?? 0) + 1
     let node = LedgerCategory(
       id: nextCategoryId,

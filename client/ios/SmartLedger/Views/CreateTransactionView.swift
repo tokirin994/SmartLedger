@@ -805,6 +805,8 @@ struct HierarchicalCategoryPicker: View {
     @Binding var selectedCategoryId: Int?
     let flowType: FlowType
     let onCreateCategory: ((Int?) -> Void)?
+    /// 分类编辑时只允许选择一级分类作为父级，避免把叶子二级分类再嵌套成第三级。
+    var allowsDescendantSelection: Bool = true
     
     @State private var isPresenting = false
     
@@ -843,7 +845,8 @@ struct HierarchicalCategoryPicker: View {
                     onComplete: { isPresenting = false },
                     isRoot: true,
                     flowType: flowType,
-                    onCreateCategory: onCreateCategory
+                    onCreateCategory: onCreateCategory,
+                    allowsDescendantSelection: allowsDescendantSelection
                 )
             }
         }
@@ -878,6 +881,7 @@ private struct CategoryLevelPickerView: View {
     let isRoot: Bool
     let flowType: FlowType
     let onCreateCategory: ((Int?) -> Void)?
+    let allowsDescendantSelection: Bool
 
     var body: some View {
         List {
@@ -903,24 +907,7 @@ private struct CategoryLevelPickerView: View {
 
             Section(isRoot ? "一级分类" : "下一级分类") {
                 ForEach(categories) { category in
-                    NavigationLink {
-                        CategoryNodeSelectionView(
-                            category: category,
-                            selectedCategoryId: $selectedCategoryId,
-                            onComplete: onComplete,
-                            flowType: flowType,
-                            onCreateCategory: onCreateCategory
-                        )
-                    } label: {
-                        HStack(spacing: 12) {
-                            categoryRowTitle(category)
-                            Spacer()
-                            if selectedCategoryId == category.id {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                    }
+                    categoryRow(category)
                 }
 
                 if let onCreateCategory {
@@ -960,6 +947,45 @@ private struct CategoryLevelPickerView: View {
             Text(category.name)
         }
     }
+
+    @ViewBuilder
+    private func categoryRow(_ category: LedgerCategory) -> some View {
+        // 叶子分类本身就是最终选择，不再额外打开一个“当前分类”页面。
+        if category.children.isEmpty || !allowsDescendantSelection {
+            Button {
+                selectedCategoryId = category.id
+                onComplete()
+            } label: {
+                selectionLabel(for: category)
+            }
+            .foregroundStyle(.primary)
+        } else {
+            NavigationLink {
+                CategoryNodeSelectionView(
+                    category: category,
+                    selectedCategoryId: $selectedCategoryId,
+                    onComplete: onComplete,
+                    flowType: flowType,
+                    onCreateCategory: onCreateCategory,
+                    allowsDescendantSelection: allowsDescendantSelection
+                )
+            } label: {
+                selectionLabel(for: category)
+            }
+        }
+    }
+
+    private func selectionLabel(for category: LedgerCategory) -> some View {
+        HStack(spacing: 12) {
+            categoryRowTitle(category)
+            Spacer()
+            if selectedCategoryId == category.id {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+            }
+        }
+        .contentShape(Rectangle())
+    }
 }
 
 private struct CategoryNodeSelectionView: View {
@@ -968,6 +994,7 @@ private struct CategoryNodeSelectionView: View {
     let onComplete: () -> Void
     let flowType: FlowType
     let onCreateCategory: ((Int?) -> Void)?
+    let allowsDescendantSelection: Bool
 
     var body: some View {
         List {
@@ -994,24 +1021,7 @@ private struct CategoryNodeSelectionView: View {
             if !category.children.isEmpty {
                 Section("下一级") {
                     ForEach(category.children) { child in
-                        NavigationLink {
-                            CategoryNodeSelectionView(
-                                category: child,
-                                selectedCategoryId: $selectedCategoryId,
-                                onComplete: onComplete,
-                                flowType: flowType,
-                                onCreateCategory: onCreateCategory
-                            )
-                        } label: {
-                            HStack(spacing: 12) {
-                                rowTitle(child)
-                                Spacer()
-                                if selectedCategoryId == child.id {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                        }
+                        childRow(child)
                     }
                 }
             }
@@ -1044,6 +1054,45 @@ private struct CategoryNodeSelectionView: View {
             }
             Text(category.name)
         }
+    }
+
+    @ViewBuilder
+    private func childRow(_ child: LedgerCategory) -> some View {
+        // 二级“外卖”等叶子分类点按后直接回填，不产生空的第三层页面。
+        if child.children.isEmpty || !allowsDescendantSelection {
+            Button {
+                selectedCategoryId = child.id
+                onComplete()
+            } label: {
+                childSelectionLabel(child)
+            }
+            .foregroundStyle(.primary)
+        } else {
+            NavigationLink {
+                CategoryNodeSelectionView(
+                    category: child,
+                    selectedCategoryId: $selectedCategoryId,
+                    onComplete: onComplete,
+                    flowType: flowType,
+                    onCreateCategory: onCreateCategory,
+                    allowsDescendantSelection: allowsDescendantSelection
+                )
+            } label: {
+                childSelectionLabel(child)
+            }
+        }
+    }
+
+    private func childSelectionLabel(_ child: LedgerCategory) -> some View {
+        HStack(spacing: 12) {
+            rowTitle(child)
+            Spacer()
+            if selectedCategoryId == child.id {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
