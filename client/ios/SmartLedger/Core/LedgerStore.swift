@@ -624,16 +624,33 @@ final class LedgerStore: ObservableObject {
   }
 
   func deleteCategory(_ categoryId: Int) async {
-    guard let target = flattenedCategories.first(where: { $0.id == categoryId }) else { return }
-    let removedIDs = Set(target.flattened().map(\.id))
-    let fallback = selectableCategories.first { $0.flowType == target.flowType && $0.name.hasSuffix("未分类") && !removedIDs.contains($0.id) }
-    categories = CategoryTreeBuilder.removing(ids: removedIDs, from: categories)
+    // 必须从原始树取节点；flattenedCategories 会将 children 展平为空数组。
+    guard let target = categoryTreeNode(withID: categoryId, in: categories) else { return }
+    guard target.children.isEmpty else {
+      errorMessage = "“\(target.name)”下还有子分类，不能删除。请先处理或删除其子分类。"
+      return
+    }
+    let collectingBooks = books.filter {
+      $0.autoCollectEnabled && $0.autoCollectCategoryIds.contains(target.id)
+    }
+    guard collectingBooks.isEmpty else {
+      let names = collectingBooks.map(\.name).joined(separator: "、")
+      errorMessage = "“\(target.name)”正在被账本“\(names)”的自动归集使用，无法删除。请先在账本设置中移除该归集分类。"
+      return
+    }
+
+    // 删除叶子分类时，流水回退至直属上级；一级分类没有上级时回退为未分类（nil）。
+    let parent = target.parentId.flatMap { parentID in
+      flattenedCategories.first(where: { $0.id == parentID })
+    }
+    categories = CategoryTreeBuilder.removing(ids: [target.id], from: categories)
     transactions = transactions.map { transaction in
-      guard let id = transaction.categoryId, removedIDs.contains(id) else { return transaction }
-      return rebuildTransaction(transaction, bookId: transaction.bookId, bookName: transaction.bookName, bookIds: transaction.bookIds, bookNames: transaction.bookNames, categoryId: fallback?.id, categoryName: fallback?.name, replacingCategory: true)
+      guard transaction.categoryId == target.id else { return transaction }
+      return rebuildTransaction(transaction, bookId: transaction.bookId, bookName: transaction.bookName, bookIds: transaction.bookIds, bookNames: transaction.bookNames, categoryId: parent?.id, categoryName: parent?.name, replacingCategory: true)
     }
     refreshDerivedData()
-    await persistAndMaybeSync(reason: "分类已删除，相关流水已归入未分类")
+    let destination = parent?.name ?? "未分类"
+    await persistAndMaybeSync(reason: "分类已删除，相关流水已归入\(destination)")
   }
 
   func appendExtendedDemoData() async {
@@ -675,6 +692,16 @@ final class LedgerStore: ObservableObject {
 
   var flattenedCategories: [LedgerCategory] {
     categories.flatMap { $0.flattened() }
+  }
+
+  private func categoryTreeNode(withID id: Int, in nodes: [LedgerCategory]) -> LedgerCategory? {
+    for node in nodes {
+      if node.id == id { return node }
+      if let child = categoryTreeNode(withID: id, in: node.children) {
+        return child
+      }
+    }
+    return nil
   }
 
   var selectableCategories: [LedgerCategory] {

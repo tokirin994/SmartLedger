@@ -318,6 +318,7 @@ struct CategoryEditorView: View {
 private struct CategoryNodeView: View {
     @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
+    @State private var deletionMessage: String?
 
     var body: some View {
         Group {
@@ -343,8 +344,15 @@ private struct CategoryNodeView: View {
         }
         .padding(12)
         .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .alert("无法删除分类", isPresented: deletionAlertPresented) {
+            Button("知道了", role: .cancel) {
+                deletionMessage = nil
+            }
+        } message: {
+            Text(deletionMessage ?? "")
+        }
         .contextMenu {
-            Button(role: .destructive) { Task { await store.deleteCategory(category.id) } } label: { Label("删除分类", systemImage: "trash") }
+            Button(role: .destructive) { delete(category) } label: { Label("删除分类", systemImage: "trash") }
         }
     }
 
@@ -381,6 +389,30 @@ private struct CategoryNodeView: View {
             }
         }
         .padding(.vertical, 1)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                delete(item)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private var deletionAlertPresented: Binding<Bool> {
+        Binding(
+            get: { deletionMessage != nil },
+            set: { if !$0 { deletionMessage = nil } }
+        )
+    }
+
+    private func delete(_ item: LedgerCategory) {
+        Task {
+            store.errorMessage = nil
+            await store.deleteCategory(item.id)
+            if let error = store.errorMessage {
+                deletionMessage = error
+            }
+        }
     }
 }
 
