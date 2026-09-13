@@ -86,8 +86,11 @@ private struct BookRow: View {
                         Text(book.name).font(.headline)
                         if book.isPinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
                     }
-                    Text(book.note?.isEmpty == false ? book.note! : "将相关流水归集在一起")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Label(book.splitEnabled ? "多人分账" : "个人记账", systemImage: book.splitEnabled ? "person.2.fill" : "person.fill")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(book.splitEnabled ? .purple : .secondary)
+                        .padding(.horizontal, 7).padding(.vertical, 4)
+                        .background((book.splitEnabled ? Color.purple : Color.secondary).opacity(0.11), in: Capsule())
                     Label("\(book.transactionCount) 笔流水", systemImage: "list.bullet")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
@@ -100,6 +103,12 @@ private struct BookRow: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(book.balance < 0 ? .red : .blue)
                         .lineLimit(1).minimumScaleFactor(0.7)
+                    HStack(spacing: 6) {
+                        Text("支 \(book.expenseAmount.cnyText)").foregroundStyle(.orange)
+                        Text("收 \(book.incomeAmount.cnyText)").foregroundStyle(.green)
+                    }
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1).minimumScaleFactor(0.65)
                 }
             }
 
@@ -109,11 +118,6 @@ private struct BookRow: View {
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(Color(hex: book.color ?? "#4F46E5"))
                     .lineLimit(1)
-                Spacer(minLength: 6)
-                Text("支 \(book.expenseAmount.cnyText)")
-                    .foregroundStyle(.orange)
-                Text("收 \(book.incomeAmount.cnyText)")
-                    .foregroundStyle(.green)
             }
             .font(.caption2.weight(.medium))
         }
@@ -398,6 +402,12 @@ private struct BookEditorView: View {
         }
         let amount = budgetEnabled ? Double(budgetText) : nil
         let draft = BookDraft(name: name.trimmingCharacters(in: .whitespacesAndNewlines), icon: icon.isEmpty ? nil : icon, note: note.isEmpty ? nil : note, color: color.isEmpty ? nil : color, startDate: hasDateRange ? startDate : nil, endDate: hasDateRange && hasEndDate ? endDate : nil, budgetLimitAmount: amount, budgetStartDate: hasDateRange ? startDate : nil, budgetEndDate: hasDateRange && hasEndDate ? endDate : nil, autoCollectEnabled: autoCollectEnabled, participantNames: members, isPinned: isPinned, autoCollectCategoryIds: Array(selectedCategoryIDs).sorted())
+        // “调整并执行”已将最新草稿持久化。此时再次点页面上的保存不应静默无响应，
+        // 直接关闭编辑页即可；若用户又编辑过任何字段，仍会走正常保存流程。
+        if let book, isCurrentPersistedBook(book, matching: draft) {
+            dismiss()
+            return
+        }
         store.errorMessage = nil
         if let book {
             await store.updateBook(book.id, with: draft)
@@ -412,6 +422,22 @@ private struct BookEditorView: View {
         }
         if let error = store.errorMessage { saveFailureMessage = error; return }
         dismiss()
+    }
+
+    private func isCurrentPersistedBook(_ current: LedgerBook, matching draft: BookDraft) -> Bool {
+        current.name == draft.name &&
+        current.icon == draft.icon &&
+        current.note == draft.note &&
+        current.color == draft.color &&
+        current.startDate == draft.startDate &&
+        current.endDate == draft.endDate &&
+        current.budgetLimitAmount == draft.budgetLimitAmount &&
+        current.budgetStartDate == draft.budgetStartDate &&
+        current.budgetEndDate == draft.budgetEndDate &&
+        current.autoCollectEnabled == draft.autoCollectEnabled &&
+        current.participantNames == draft.participantNames &&
+        current.isPinned == draft.isPinned &&
+        current.autoCollectCategoryIds.sorted() == draft.autoCollectCategoryIds.sorted()
     }
 
     private func confirmAutoCollectSetup() async {
