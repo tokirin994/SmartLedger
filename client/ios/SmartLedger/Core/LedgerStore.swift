@@ -486,8 +486,7 @@ final class LedgerStore: ObservableObject {
     if collectUnassignedNow {
       for index in transactions.indices {
         let transaction = transactions[index]
-        guard transaction.bookIds.isEmpty,
-              transaction.bookId == nil,
+        guard !transaction.bookIds.contains(bookId),
               shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId) else { continue }
         var ids = transaction.bookIds
         var names = transaction.bookNames
@@ -1198,3 +1197,9 @@ private enum CategoryTreeBuilder {
         }
     }
 }
+/*
+m.children))
+        }
+    }
+}
+*/
