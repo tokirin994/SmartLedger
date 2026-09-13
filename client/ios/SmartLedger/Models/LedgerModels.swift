@@ -152,6 +152,11 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
 
     var isLeaf: Bool { children.isEmpty }
 
+    /// 供 SwiftUI OutlineGroup 使用：nil 表示叶子节点，避免为没有子项的分类继续展示折叠入口。
+    var outlineChildren: [LedgerCategory]? {
+        children.isEmpty ? nil : children
+    }
+
     func flattened(prefix: [String] = []) -> [LedgerCategory] {
         let currentPrefix = prefix + [name]
         let current = LedgerCategory(

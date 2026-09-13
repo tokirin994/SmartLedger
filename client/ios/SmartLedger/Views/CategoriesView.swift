@@ -27,8 +27,9 @@ struct CategoriesView: View {
                 .padding(.top)
 
                 List {
-                    ForEach(categoryRows) { entry in
-                        CategoryListRow(category: entry.category, depth: entry.depth)
+                    // OutlineGroup 生成真正的层级列表行：默认折叠，展开后每个子项仍可独立左滑。
+                    OutlineGroup(filteredRoots, children: \.outlineChildren) { category in
+                        CategoryListRow(category: category)
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -72,19 +73,6 @@ struct CategoriesView: View {
         filteredRoots.map { $0.flattened().count }.reduce(0, +)
     }
 
-    /// 每一个分类都是 List 中的独立行，二级及更深分类通过缩进表达层级，
-    /// 从而保证任意分类都能正常左滑操作。
-    private var categoryRows: [CategoryListEntry] {
-        flattenedRows(from: filteredRoots)
-    }
-
-    private func flattenedRows(from nodes: [LedgerCategory], depth: Int = 0) -> [CategoryListEntry] {
-        nodes.flatMap { category in
-            [CategoryListEntry(category: category, depth: depth)]
-                + flattenedRows(from: category.children, depth: depth + 1)
-        }
-    }
-
     private func categoryMatches(_ category: LedgerCategory) -> Bool {
         let keyword = searchText.lowercased()
         if keyword.isEmpty { return true }
@@ -104,12 +92,6 @@ struct CategoriesView: View {
         .padding(14)
         .glassCard(cornerRadius: 18, strokeOpacity: 0.22)
     }
-}
-
-private struct CategoryListEntry: Identifiable {
-    let category: LedgerCategory
-    let depth: Int
-    var id: Int { category.id }
 }
 
 struct CategoryEditorView: View {
@@ -337,7 +319,6 @@ struct CategoryEditorView: View {
 private struct CategoryListRow: View {
     @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
-    let depth: Int
     @State private var deletionMessage: String?
 
     var body: some View {
@@ -365,11 +346,6 @@ private struct CategoryListRow: View {
 
     private var row: some View {
         HStack {
-            if depth > 0 {
-                Color.clear
-                    .frame(width: CGFloat(min(depth, 4)) * 16)
-            }
-
             ZStack {
                 Circle()
                     .fill(category.flowType == .expense ? Color.orange : Color.green)
