@@ -38,6 +38,10 @@ struct MetricCard: View {
 
             Text(value)
                 .font(.system(size: 30, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.52)
+                .allowsTightening(true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             if showSubtitle {
                 Text(subtitle)
@@ -46,7 +50,7 @@ struct MetricCard: View {
             }
         }
         .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 142, maxHeight: 142, alignment: .topLeading)
         .glassCard(cornerRadius: 24, strokeOpacity: 0.30)
         .shadow(color: .black.opacity(0.04), radius: 14, x: 0, y: 8)
     }

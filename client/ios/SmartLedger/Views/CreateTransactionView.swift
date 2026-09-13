@@ -75,6 +75,7 @@ struct CreateTransactionView: View {
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
 

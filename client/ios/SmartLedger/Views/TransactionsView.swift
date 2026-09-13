@@ -525,8 +525,8 @@ private struct QuickCategoryAssignSheet: View {
                 }
 
                 Section("分类") {
-                    ForEach(store.categories.filter { $0.flowType == transaction.kind }) { category in
-                        ExpandableCategoryRow(category: category, selectedCategoryId: $selectedCategoryId)
+                    OutlineGroup(store.categories.filter { $0.flowType == transaction.kind }, children: \.outlineChildren) { category in
+                        QuickCategoryPickerRow(category: category, selectedCategoryId: $selectedCategoryId)
                     }
                 }
             }
@@ -553,37 +553,17 @@ private struct QuickCategoryAssignSheet: View {
     }
 }
 
-private struct ExpandableCategoryRow: View {
+private struct QuickCategoryPickerRow: View {
     let category: LedgerCategory
     @Binding var selectedCategoryId: Int?
-    @State private var expanded = false
 
     var body: some View {
-        if category.children.isEmpty {
-            Button {
-                selectedCategoryId = category.id
-            } label: {
-                rowContent(category)
-            }
-            .buttonStyle(.plain)
-        } else {
-            DisclosureGroup(isExpanded: $expanded) {
-                VStack(spacing: 6) {
-                    ForEach(category.children) { child in
-                        ExpandableCategoryRow(category: child, selectedCategoryId: $selectedCategoryId)
-                            .padding(.leading, 12)
-                    }
-                }
-                .padding(.top, 6)
-            } label: {
-                Button {
-                    selectedCategoryId = category.id
-                } label: {
-                    rowContent(category)
-                }
-                .buttonStyle(.plain)
-            }
+        Button {
+            selectedCategoryId = category.id
+        } label: {
+            rowContent(category)
         }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -605,6 +585,7 @@ private struct ExpandableCategoryRow: View {
             }
         }
         .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     }
 }
 

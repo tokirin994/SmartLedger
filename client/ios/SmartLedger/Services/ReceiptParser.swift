@@ -121,13 +121,15 @@ struct ReceiptParser {
     private func parseWeChatTransferDetail(lines: [String]) -> OCRImportResult {
         let text = lines.joined(separator: "\n")
         let fieldMap = makeFieldMap(lines: lines)
-        let title = lines.first(where: { $0.contains("付款") || $0.contains("转给") }) ?? "转账详情"
+        let transferHeadline = lines.first(where: { $0.contains("付款") || $0.contains("转给") })
 
         let amountLine = lines.first(where: { $0.range(of: #"^[-‑]?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
         let happenedAt = extractDate(from: extractWeChatTransferFieldValue(label: "转账时间", lines: lines) ?? fieldMap["转账时间"] ?? text)
         let paymentMethod = normalizePaymentMethod(extractWeChatTransferFieldValue(label: "支付方式", lines: lines) ?? fieldMap["支付方式"] ?? fieldMap["付款方式"] ?? "零钱")
-        let merchant = normalizeListMerchant(title) ?? title
+        let merchant = normalizeListMerchant(transferHeadline ?? "") ?? transferHeadline
+        // 商品名称优先；转账截图通常没有商品字段，此时自然回退到对方账户名称。
+        let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant) ?? transferHeadline ?? merchant ?? "转账详情"
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)
         let detailKeys = ["当前状态", "收款方备注", "支付方式", "转账时间", "转账单号", "零钱余额"]
         let details = detailKeys
@@ -162,7 +164,10 @@ struct ReceiptParser {
         let happenedAt = lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) }
         let paymentMethod = extractAlipayDetailPaymentMethod(from: lines)
         let merchant = extractAlipayDetailMerchant(from: lines)
-        let title = extractAlipayDetailTitle(from: lines) ?? merchant
+        let fieldMap = makeFieldMap(lines: lines)
+        let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant)
+            ?? extractAlipayDetailTitle(from: lines)
+            ?? merchant
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)
         let details = buildAlipayDetailItems(lines: lines, happenedAt: happenedAt, paymentMethod: paymentMethod)
         let classified = normalizeClassifiedResult(kind: kind, classify(text: [title, merchant, paymentMethod, text].compactMap { $0 }.joined(separator: "\n")))
@@ -662,24 +667,13 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
      }
 
      private func preferredDetailTitle(fieldMap: [String: String], lines: [String], merchant: String?) -> String? {
-       if let head = lines.first(where: {
-         $0 != "账单" &&
-         $0.range(of: #"[\u4e00-\u9fffA-Za-z]"#, options: .regularExpression) != nil &&
-         !isNoiseLine($0) &&
-         !$0.contains("公司") &&
-         !$0.contains("支付科技") &&
-         !$0.contains("优惠") &&
-         !$0.contains("支付成功") &&
-         !$0.contains("信用卡") &&
-         !$0.contains("银行卡")
-       }) {
-         return head
-       }
-       if let product = fieldMap["商品"], !product.isEmpty, !detailFieldLabels.contains(product),
- !product.contains("商户全称") {
-         return product
-       }
-       if let product = fieldMap["商品说明"], !product.isEmpty, !detailFieldLabels.contains(product) {
+       // 标题统一遵循“商品名称优先、对方账户兜底”，避免把支付状态或页面标题误当流水标题。
+       for key in ["商品名称", "商品", "商品说明", "商品详情", "商品信息"] {
+         guard let product = fieldMap[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !product.isEmpty,
+               !detailFieldLabels.contains(product),
+               !product.contains("商户全称"),
+               !isNoiseLine(product) else { continue }
          return product
        }
        return merchant

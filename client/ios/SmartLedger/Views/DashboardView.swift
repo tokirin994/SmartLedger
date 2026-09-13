@@ -575,11 +575,11 @@ private var summaryGrid: some View {
 
     private var budgetsSection: some View {
         SectionCard(title: "预算跟踪", subtitle: "显示预算结余与占比卡片") {
-            if store.budgets.isEmpty {
+            if visibleBudgets.isEmpty {
                 ContentUnavailableView("暂无预算", systemImage: "wallet.pass")
             } else {
                 VStack(spacing: 14) {
-                    ForEach(store.budgets) { budget in
+                    ForEach(visibleBudgets) { budget in
                         BudgetStatusCard(item: budget)
                     }
                 }
@@ -647,8 +647,29 @@ private var summaryGrid: some View {
     }
 
     private var remainingBudget: Double {
-        guard !store.budgets.isEmpty else { return 0 }
-        return store.budgets.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
+        visibleBudgets.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
+    }
+
+    private var visibleBudgets: [BudgetItem] {
+        let window = isCustomRangeActive ? store.activeCustomRange.resolvedWindow : preset.dateRangePreset.resolve()
+        return store.budgets.filter { budget in
+            let interval = budgetActiveInterval(budget)
+            return interval.start < window.end && interval.end >= window.start
+        }
+    }
+
+    private func budgetActiveInterval(_ budget: BudgetItem) -> DateWindow {
+        let calendar = Calendar.current
+        if budget.periodType != "range", let month = budget.month {
+            var components = DateComponents()
+            components.year = budget.year
+            components.month = month
+            components.day = 1
+            let start = calendar.date(from: components) ?? .distantPast
+            let end = calendar.date(byAdding: .month, value: 1, to: start) ?? .distantFuture
+            return DateWindow(start: start, end: end)
+        }
+        return DateWindow(start: budget.startDate ?? .distantPast, end: budget.endDate ?? .distantFuture)
     }
 
     private func reload() async {
