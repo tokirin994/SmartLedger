@@ -150,7 +150,17 @@ final class LedgerStore: ObservableObject {
     func parseOCR(text: String) async {
         let result = parser.parse(rawText: text)
         parsedImport = result
-        parsedImportItems = parser.parseMultiple(rawText: text)
+        let multiple = parser.parseMultiple(rawText: text)
+        parsedImportItems = multiple.isEmpty ? [result] : multiple
+    }
+
+    func clearOCRImport() {
+        parsedImport = nil
+        parsedImportItems = []
+    }
+
+    var hasPendingOCRImport: Bool {
+        parsedImport != nil || !parsedImportItems.isEmpty
     }
 
     func createTransaction(_ draft: TransactionDraft) async {

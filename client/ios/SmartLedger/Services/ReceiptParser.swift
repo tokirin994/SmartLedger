@@ -347,11 +347,17 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
             continue
         }
         guard isListDateLine(line) else { continue }
-        let candidateStart = max(0, index - 3)
-        guard let titleLine = cleaned[candidateStart..<index].reversed().first(where: { candidate in
-            isTransactionTitleLine(candidate) && extractSignedAmountAnywhere(in: candidate) != nil
-        }) else { continue }
-        records.append((title: cleanListTitle(titleLine), dateLine: line, month: currentMonth, inlineAmount: extractSignedAmountAnywhere(in: titleLine)))
+        // Vision may put a title, amount and date in separate visual rows. Pick
+        // the nearest human-readable row, then search the surrounding record for
+        // its signed amount instead of requiring title and amount to share a row.
+        let candidateStart = max(0, index - 4)
+        let nearbyBefore = Array(cleaned[candidateStart..<index])
+        guard let titleLine = nearbyBefore.reversed().first(where: isTransactionTitleLine) else { continue }
+        let nearbyAfter = Array(cleaned[index..<min(cleaned.count, index + 3)])
+        let inlineAmount = ([titleLine] + Array(nearbyBefore.reversed()) + nearbyAfter)
+            .compactMap(extractSignedAmountAnywhere(in:))
+            .first
+        records.append((title: cleanListTitle(titleLine), dateLine: line, month: currentMonth, inlineAmount: inlineAmount))
     }
 
     let amountLines = cleaned.filter { line in
@@ -578,7 +584,7 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
 
      private func extractCurrency(from text: String?) -> Double? {
        guard let text else { return nil }
-       let normalized = text.replacingOccurrences(of: ",", with: "")
+       let normalized = normalizedAmountText(text)
        if let range = normalized.range(of: #"^-?\s*[¥￥]?\s*\d+(?:\.\d{1,2})#"#, options: .regularExpression) {
          let value = String(normalized[range])
            .replacingOccurrences(of: "¥", with: "")
@@ -590,7 +596,7 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
      }
 
      private func extractCurrencyAnywhere(_ text: String) -> Double? {
-       let normalized = text.replacingOccurrences(of: ",", with: "")
+       let normalized = normalizedAmountText(text)
        guard let range = normalized.range(of: #"[¥￥]\s*\d+(?:\.\d{1,2})?"#, options: .regularExpression) else { return nil }
        return Double(String(normalized[range])
          .replacingOccurrences(of: "¥", with: "")
@@ -599,22 +605,36 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
      }
 
      private func extractSignedAmount(from text: String) -> Double? {
-       let normalized = text.replacingOccurrences(of: ",", with: "")
-       guard let range = normalized.range(of: #"^[-+‑]\d+(?:\.\d{1,2})"#, options: .regularExpression) else { return nil }
-       return Double(String(normalized[range]))
+       let normalized = normalizedAmountText(text)
+       guard let range = normalized.range(of: #"^[-+]\s*[¥￥]?\s*\d+(?:\.\d{1,2})"#, options: .regularExpression) else { return nil }
+       return Double(String(normalized[range]).replacingOccurrences(of: "¥", with: "").replacingOccurrences(of: "￥", with: "").replacingOccurrences(of: " ", with: ""))
      }
 
      private func extractSignedAmountAnywhere(in text: String) -> Double? {
-       let normalized = text.replacingOccurrences(of: ",", with: "")
-       guard let range = normalized.range(of: #"[-+‑]\d+(?:\.\d{1,2})"#, options: .regularExpression) else { return nil }
-       return Double(String(normalized[range]).replacingOccurrences(of: "‑", with: "-"))
+       let normalized = normalizedAmountText(text)
+       let patterns = [#"[-+]\s*[¥￥]?\s*\d+(?:\.\d{1,2})"#, #"[¥￥]\s*[-+]\s*\d+(?:\.\d{1,2})"#]
+       for pattern in patterns where normalized.range(of: pattern, options: .regularExpression) != nil {
+           let range = normalized.range(of: pattern, options: .regularExpression)!
+           return Double(String(normalized[range]).replacingOccurrences(of: "¥", with: "").replacingOccurrences(of: "￥", with: "").replacingOccurrences(of: " ", with: ""))
+       }
+       return nil
+     }
+
+     private func normalizedAmountText(_ text: String) -> String {
+       text.replacingOccurrences(of: ",", with: "")
+         .replacingOccurrences(of: "−", with: "-")
+         .replacingOccurrences(of: "‑", with: "-")
+         .replacingOccurrences(of: "–", with: "-")
+         .replacingOccurrences(of: "—", with: "-")
      }
 
      private func cleanListTitle(_ text: String) -> String {
        text
-         .replacingOccurrences(of: #"\s*[-+‑]\d+(?:\.\d{1,2})?\s*"#, with: " ", options: .regularExpression)
-         .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
-         .trimmingCharacters(in: .whitespacesAndNewlines)
+          .replacingOccurrences(of: #"\s*[¥￥]?[-+‑−]\s*\d+(?:\.\d{1,2})?\s*"#, with: " ", options: .regularExpression)
+          .replacingOccurrences(of: #"零钱余额\s*\d+(?:\.\d{1,2})?"#, with: "", options: .regularExpression)
+          .replacingOccurrences(of: #"^\d{4}年\d{1,2}月\s*"#, with: "", options: .regularExpression)
+          .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+          .trimmingCharacters(in: .whitespacesAndNewlines)
      }
 
      private func detectKind(in text: String) -> FlowType {

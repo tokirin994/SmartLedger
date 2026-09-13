@@ -11,6 +11,7 @@ struct ImportReceiptView: View {
     @State private var isRecognizing = false
     @State private var draft = TransactionDraft(source: "ocr")
     @State private var selectedBatchIDs: Set<String> = []
+    @State private var showClearConfirmation = false
     private let ocrService = OCRImportService()
     
     var body: some View {
@@ -60,15 +61,31 @@ struct ImportReceiptView: View {
 }
 .appBackground()
 .navigationTitle("图片识别")
+.toolbar {
+    if selectedImage != nil || store.hasPendingOCRImport {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button("清空", role: .destructive) { showClearConfirmation = true }
+        }
+    }
+}
 .onChange(of: selectedItem) { _, newValue in
     guard let newValue else { return }
     Task { await loadImage(from: newValue) }
+}
+.onReceive(NotificationCenter.default.publisher(for: .smartLedgerDiscardOCRImport)) { _ in
+    clearImportState()
+}
+.alert("清空识别内容？", isPresented: $showClearConfirmation) {
+    Button("清空", role: .destructive) { clearImportState() }
+    Button("取消", role: .cancel) {}
+} message: {
+    Text("将丢弃当前图片、识别结果和所有待确认流水，已保存的流水不会受影响。")
 }
         }
     }
 
 private var batchImportSection: some View {
-    SectionCard(title: "批量识别结果") {
+    SectionCard(title: "待确认流水（\(store.parsedImportItems.count) 笔）") {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(store.parsedImportItems) { item in
                 Button {
@@ -115,7 +132,7 @@ private var batchImportSection: some View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("清空") {
+                Button("取消全选") {
                     selectedBatchIDs.removeAll()
                 }
                 .buttonStyle(.bordered)
@@ -263,6 +280,9 @@ private func applyParsedCategorySuggestion(parsed: OCRImportResult) {
 private func loadImage(from item: PhotosPickerItem) async {
     do {
         isRecognizing = true
+        store.clearOCRImport()
+        selectedBatchIDs.removeAll()
+        recognizedText = ""
         if let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
             selectedImage = image
             recognizedText = try await ocrService.recognizeText(from: image)
@@ -301,8 +321,7 @@ private func toggleBatchSelection(_ id: String) {
 }
 
 private func clearImportState() {
-    store.parsedImport = nil
-    store.parsedImportItems = []
+    store.clearOCRImport()
     selectedItem = nil
     selectedImage = nil
     recognizedText = ""

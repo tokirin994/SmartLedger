@@ -19,12 +19,16 @@ struct SmartLedgerApp: App {
 }
 
 private struct RootTabView: View {
+    @EnvironmentObject private var store: LedgerStore
     @State private var selection: RootTab = .dashboard
     @State private var dashboardResetToken = UUID()
     @State private var booksResetToken = UUID()
     @State private var transactionsResetToken = UUID()
     @State private var importsResetToken = UUID()
     @State private var moreResetToken = UUID()
+    @State private var pendingTabAfterOCRDiscard: RootTab?
+    @State private var showOCRDiscardConfirmation = false
+    @State private var isRevertingOCRSelection = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -61,8 +65,34 @@ private struct RootTabView: View {
         }
         .tint(Color.accentColor)
         .appBackdrop()
-        .onChange(of: selection) { _, newValue in
-            resetCurrentTab(newValue)
+        .onChange(of: selection) { oldValue, newValue in
+            if isRevertingOCRSelection {
+                isRevertingOCRSelection = false
+                return
+            }
+            guard oldValue == .imports,
+                  newValue != .imports,
+                  store.hasPendingOCRImport else {
+                resetCurrentTab(newValue)
+                return
+            }
+            pendingTabAfterOCRDiscard = newValue
+            isRevertingOCRSelection = true
+            selection = .imports
+            showOCRDiscardConfirmation = true
+        }
+        .alert("丢弃当前识别？", isPresented: $showOCRDiscardConfirmation) {
+            Button("继续切换并丢弃", role: .destructive) {
+                store.clearOCRImport()
+                NotificationCenter.default.post(name: .smartLedgerDiscardOCRImport, object: nil)
+                if let destination = pendingTabAfterOCRDiscard {
+                    pendingTabAfterOCRDiscard = nil
+                    selection = destination
+                }
+            }
+            Button("留在识图页", role: .cancel) { pendingTabAfterOCRDiscard = nil }
+        } message: {
+            Text("当前图片和待确认流水尚未保存。继续切换会丢弃这些识别内容。")
         }
     }
 
@@ -85,6 +115,7 @@ private struct RootTabView: View {
 
 extension Notification.Name {
     static let smartLedgerResetTabRoot = Notification.Name("smartledger.resetTabRoot")
+    static let smartLedgerDiscardOCRImport = Notification.Name("smartledger.discardOCRImport")
 }
 
 enum RootTab: Hashable {
