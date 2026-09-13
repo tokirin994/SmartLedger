@@ -530,9 +530,9 @@ extension OCRImportResult {
 }
 
 struct OCRImportResult: Codable, Identifiable, Sendable {
-    var id: String {
-        title ?? merchant ?? "ocr"
-    }
+    // OCR list screenshots often contain repeated merchants/titles. A generated
+    // identifier keeps every recognised row independently editable/selectable.
+    var id: String = UUID().uuidString
     var amount: Double?
     var kind: FlowType?
     var merchant: String?

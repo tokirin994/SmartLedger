@@ -12,6 +12,7 @@ struct ImportReceiptView: View {
     @State private var draft = TransactionDraft(source: "ocr")
     @State private var selectedBatchIDs: Set<String> = []
     @State private var showClearConfirmation = false
+    @State private var editingBatchItem: OCRImportResult?
     private let ocrService = OCRImportService()
     
     var body: some View {
@@ -81,6 +82,13 @@ struct ImportReceiptView: View {
 } message: {
     Text("将丢弃当前图片、识别结果和所有待确认流水，已保存的流水不会受影响。")
 }
+.sheet(item: $editingBatchItem) { item in
+    OCRBatchItemEditor(item: item) { updated in
+        replaceBatchItem(updated)
+    }
+    .environmentObject(store)
+    .environmentObject(settings)
+}
         }
     }
 
@@ -100,8 +108,9 @@ private var batchImportSection: some View {
                                 Text(item.title ?? "未命名流水")
                                     .font(.headline)
                                 Spacer()
-                                Text((item.amount ?? 0).cnyText)
+                                Text(item.amount.map { $0.cnyText } ?? "待填写")
                                     .font(.headline.weight(.semibold))
+                                    .foregroundStyle(item.amount == nil ? .orange : .primary)
                             }
                             Text(item.happenedAt?.formatted(date: .abbreviated, time: .shortened) ?? "未识别时间")
                                 .font(.caption)
@@ -125,6 +134,12 @@ private var batchImportSection: some View {
                     .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
                 }
                 .buttonStyle(.plain)
+                .overlay(alignment: .bottomTrailing) {
+                    Button("编辑") { editingBatchItem = item }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .padding(18)
+                }
             }
             HStack(spacing: 12) {
                 Button("全选") {
@@ -329,6 +344,74 @@ private func clearImportState() {
     draft = TransactionDraft(source: "ocr")
 }
 
+private struct OCRBatchItemEditor: View {
+    @EnvironmentObject private var store: LedgerStore
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
+    let item: OCRImportResult
+    let onSave: (OCRImportResult) -> Void
+    @State private var draft: TransactionDraft
+
+    init(item: OCRImportResult, onSave: @escaping (OCRImportResult) -> Void) {
+        self.item = item
+        self.onSave = onSave
+        _draft = State(initialValue: TransactionDraft(parsed: item, source: "ocr"))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("待确认流水") {
+                    TextField("标题", text: $draft.title)
+                    TextField("金额", text: $draft.amount).keyboardType(.decimalPad)
+                    Picker("类型", selection: $draft.kind) {
+                        ForEach(FlowType.allCases) { kind in Text(kind.title).tag(kind) }
+                    }
+                    DatePicker("时间", selection: $draft.happenedAt)
+                    TextField("商户", text: $draft.merchant)
+                    TextField("支付渠道", text: $draft.paymentMethod)
+                    Picker("分类", selection: $draft.categoryId) {
+                        Text("未分类").tag(Int?.none)
+                        ForEach(store.selectableCategories(for: draft.kind)) { category in
+                            Text(category.name).tag(Int?.some(category.id))
+                        }
+                    }
+                }
+            }
+            .navigationTitle("编辑识别结果")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        var updated = item
+                        updated.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名流水" : draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        updated.amount = Double(draft.amount)
+                        updated.kind = draft.kind
+                        updated.happenedAt = draft.happenedAt
+                        let merchant = draft.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let paymentMethod = draft.paymentMethod.trimmingCharacters(in: .whitespacesAndNewlines)
+                        updated.merchant = merchant.isEmpty ? nil : merchant
+                        updated.paymentMethod = paymentMethod.isEmpty ? nil : paymentMethod
+                        if let categoryId = draft.categoryId,
+                           let category = store.selectableCategories(for: draft.kind).first(where: { $0.id == categoryId }) {
+                            updated.categoryPath = category.pathComponents
+                        } else {
+                            updated.categoryPath = []
+                        }
+                        if !draft.paymentMethod.isEmpty {
+                            _ = settings.registerPaymentChannel(draft.paymentMethod)
+                        }
+                        onSave(updated)
+                        dismiss()
+                    }
+                }
+            }
+            .task { if store.categories.isEmpty { await store.loadCategories() } }
+        }
+    }
+}
+
 private struct PaymentChannelPickerCard: View {
     @Binding var selection: String
     
@@ -340,6 +423,14 @@ private struct PaymentChannelPickerCard: View {
                 .padding(.vertical, 12)
                 .glassCard(cornerRadius: 12, strokeOpacity: 0.20)
         }
+    }
+}
+
+private func replaceBatchItem(_ updated: OCRImportResult) {
+    guard let index = store.parsedImportItems.firstIndex(where: { $0.id == updated.id }) else { return }
+    store.parsedImportItems[index] = updated
+    if store.parsedImport?.id == updated.id {
+        store.parsedImport = updated
     }
 }
 

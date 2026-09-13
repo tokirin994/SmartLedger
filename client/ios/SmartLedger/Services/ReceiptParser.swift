@@ -71,8 +71,11 @@ struct ReceiptParser {
             return parseEcommerceOrders(lines: lines)
         }
         if isAlipayListPage(lines) {
-            let results = parseAlipayList(lines: lines)
-            return results.isEmpty ? parseList(lines: lines) : results
+            let alipayResults = parseAlipayList(lines: lines)
+            let genericResults = parseList(lines: lines)
+            // Alipay layouts differ by app version. Keep whichever parser found
+            // more complete row anchors rather than silently dropping records.
+            return genericResults.count > alipayResults.count ? genericResults : alipayResults
         }
         return parseList(lines: lines)
     }
@@ -193,17 +196,16 @@ struct ReceiptParser {
                     if items.count == 1, let total = section.expenseTotal { return -abs(total) }
                     return nil
                 }()
-                guard let amount = rawAmount else { continue }
                 let happenedAt = parseAlipayListDate(item.dateLine, fallbackYear: currentYear)
 
-                let kind: FlowType = amount < 0 ? .expense : .income
+                let kind: FlowType = (rawAmount ?? -1) < 0 ? .expense : .income
                 let merchant = meaningfulAlipayListMerchant(provider: item.provider, title: item.title)
                 let paymentMethod: String? = "支付宝"
                 let classified = normalizeClassifiedResult(kind: kind, classify(text: [item.title, merchant, item.category, item.provider].compactMap { $0 }.joined(separator: "\n")))
 
                 results.append(
                     OCRImportResult(
-                        amount: abs(amount),
+                        amount: rawAmount.map(abs),
                         kind: kind,
                         merchant: merchant,
                         paymentMethod: paymentMethod,
@@ -217,7 +219,7 @@ struct ReceiptParser {
                             OCRLineItem(label: "分类", value: item.category ?? "未识别"),
                             OCRLineItem(label: "时间", value: item.dateLine)
                         ],
-                        confidence: itemIndex == 0 && items.count == 1 ? 0.9 : 0.87,
+                        confidence: rawAmount == nil ? 0.58 : (itemIndex == 0 && items.count == 1 ? 0.9 : 0.87),
                         rawLines: [item.provider ?? "", item.title, item.category ?? "", item.dateLine, item.amountText ?? ""],
                         originalAmount: nil,
                         discountAmount: nil
@@ -344,7 +346,9 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
         let line = cleaned[index]
         if let month = extractMonthHeader(from: line) {
             currentMonth = month
-            continue
+            // A visual OCR row can contain the month header and the first
+            // transaction together. Do not discard it if it includes an amount.
+            if extractSignedAmountAnywhere(in: line) == nil { continue }
         }
         guard isListDateLine(line) else { continue }
         // Vision may put a title, amount and date in separate visual rows. Pick
@@ -369,13 +373,13 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
     }
 
     for idx in records.indices {
-        guard let amount = records[idx].inlineAmount ?? (idx < amountLines.count ? extractSignedAmount(from: amountLines[idx]) : nil),
-              let happenedAt = parseListDate(records[idx].dateLine, fallbackYear: currentYear, monthOverride: records[idx].month) else {
+        let amount = records[idx].inlineAmount ?? (idx < amountLines.count ? extractSignedAmount(from: amountLines[idx]) : nil)
+        guard let happenedAt = parseListDate(records[idx].dateLine, fallbackYear: currentYear, monthOverride: records[idx].month) else {
             continue
         }
 
-        let kind: FlowType = amount < 0 ? .expense : .income
-        let displayAmount = abs(amount)
+        let kind: FlowType = (amount ?? -1) < 0 ? .expense : .income
+        let displayAmount = amount.map(abs)
         let title = records[idx].title
         let merchant = normalizeListMerchant(title)
         let paymentMethod = inferListPaymentMethod(from: title, fallback: pagePaymentMethod)
@@ -386,7 +390,7 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
 
         results.append(
             OCRImportResult(
-                amount: displayAmount,
+                    amount: displayAmount,
                 kind: kind,
                 merchant: merchant,
                 paymentMethod: paymentMethod,
@@ -397,10 +401,10 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
                 details: [
                     OCRLineItem(label: "识别来源", value: "列表页批量识别"),
                     OCRLineItem(label: "时间", value: records[idx].dateLine),
-                    OCRLineItem(label: "金额", value: String(format: "%.2f", displayAmount))
+                    OCRLineItem(label: "金额", value: displayAmount.map { String(format: "%.2f", $0) } ?? "待填写")
                 ],
-                confidence: min(0.58 + categoryConfidence, 0.95),
-                rawLines: [title, records[idx].dateLine, String(format: "%.2f", amount)],
+                confidence: amount == nil ? 0.52 : min(0.58 + categoryConfidence, 0.95),
+                rawLines: [title, records[idx].dateLine, amount.map { String(format: "%.2f", $0) } ?? ""],
                 originalAmount: nil,
                 discountAmount: nil
             )
@@ -792,7 +796,8 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
 
      private func isTransactionTitleLine(_ line: String) -> Bool {
        guard line.range(of: #"[\u4e00-\u9fffA‑Za‑z]"#, options: .regularExpression) != nil else { return false }
-       return !isNoiseLine(line) && !isBalanceLine(line) && extractMonthHeader(from: line) == nil && !line.contains("年")
+       if extractMonthHeader(from: line) != nil && extractSignedAmountAnywhere(in: line) == nil { return false }
+       return !isNoiseLine(line) && !isBalanceLine(line) && (!line.contains("年") || extractSignedAmountAnywhere(in: line) != nil)
      }
 
      private func normalizeListMerchant(_ title: String) -> String? {
