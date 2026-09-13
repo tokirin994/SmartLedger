@@ -364,7 +364,24 @@ private struct BookEditorView: View {
                 }
             }
             .alert("需要先设置账本期间", isPresented: $showDateRangeRequiredAlert) { Button("使用今天作为开始日期") { hasDateRange = true; startDate = Date(); showAutoCollectSetup = true }; Button("暂不开启", role: .cancel) {} } message: { Text("自动归集需要账本开始日期，用于判断哪些流水属于该账本。可以先设置开始日期，结束日期可不填写。") }
-            .alert("账本期间已变更", isPresented: $showDateRangeCollectionPrompt) { Button("仅保存期间") {}; Button("按新期间执行归集") { Task { await confirmAutoCollectSetup() } } } message: { Text("自动归集已开启。是否立即按新的账本期间和归集分类处理全部匹配流水？") }
+            .sheet(isPresented: $showDateRangeCollectionPrompt) {
+                NavigationStack {
+                    Form {
+                        Section("已有流水") {
+                            Toggle("保留已归集到本账本的流水", isOn: $keepExistingCollected)
+                            Toggle("归集全部匹配流水", isOn: $collectUnassignedNow)
+                            Text("将按新的账本期间和归集分类处理流水；关闭“保留”会取消不再符合新范围的现有关联。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    .navigationTitle("按新期间归集")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("仅保存期间") { showDateRangeCollectionPrompt = false } }
+                        ToolbarItem(placement: .confirmationAction) { Button("调整并执行") { showDateRangeCollectionPrompt = false; Task { await confirmAutoCollectSetup() } }.buttonStyle(.borderedProminent) }
+                    }
+                }
+            }
             .alert("无法保存账本", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(saveFailureMessage ?? "请检查账本设置后重试。") }
             .alert("归集规则已执行", isPresented: Binding(get: { autoCollectExecutionMessage != nil }, set: { if !$0 { autoCollectExecutionMessage = nil } })) { Button("知道了", role: .cancel) {} } message: { Text(autoCollectExecutionMessage ?? "已按当前类别和时间范围处理流水。") }
         }
@@ -428,6 +445,8 @@ private struct BookEditorView: View {
 
     private func promptToCollectForDateRangeChange() {
         guard book != nil, autoCollectEnabled, hasDateRange else { return }
+        keepExistingCollected = true
+        collectUnassignedNow = true
         showDateRangeCollectionPrompt = true
     }
 }

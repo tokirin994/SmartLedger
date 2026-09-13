@@ -942,10 +942,22 @@ final class LedgerStore: ObservableObject {
 
     private func installSupplementalDefaultSubcategoriesIfNeeded() -> Bool {
         let versionKey = "smartledgerlocal.defaultCategoryCatalogVersion"
-        guard UserDefaults.standard.integer(forKey: versionKey) < 4 else { return false }
-        defer { UserDefaults.standard.set(4, forKey: versionKey) }
+        guard UserDefaults.standard.integer(forKey: versionKey) < 5 else { return false }
+        defer { UserDefaults.standard.set(5, forKey: versionKey) }
 
         var inserted = false
+        for definition in DemoData.supplementalDefaultRoots {
+            guard !categories.contains(where: { $0.parentId == nil && $0.name == definition.name && $0.flowType == definition.flowType }) else { continue }
+            let rootID = nextCategoryId
+            nextCategoryId += 1
+            let children = definition.children.map { child -> LedgerCategory in
+                let id = nextCategoryId
+                nextCategoryId += 1
+                return LedgerCategory(id: id, name: child.0, flowType: definition.flowType, icon: child.1, color: child.2, parentId: rootID, level: 1, children: [])
+            }
+            categories.append(LedgerCategory(id: rootID, name: definition.name, flowType: definition.flowType, icon: definition.icon, color: definition.color, parentId: nil, level: 0, children: children))
+            inserted = true
+        }
         for (rootName, childNames) in DemoData.supplementalDefaultSubcategories {
             guard let root = flattenedCategories.first(where: { $0.parentId == nil && $0.name == rootName }) else { continue }
             let existingNames = Set(flattenedCategories.compactMap { category -> String? in

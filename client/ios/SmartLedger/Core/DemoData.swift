@@ -51,6 +51,24 @@ enum DemoData {
         "其他收入": ["租金收入", "意外所得"]
     ]
 
+    struct SupplementalCategoryRoot {
+        let name: String
+        let flowType: FlowType
+        let icon: String
+        let color: String
+        let children: [(String, String, String)]
+    }
+
+    /// Exact common roots that are absent from older catalog versions. They
+    /// coexist with the legacy broader roots (such as “交通出行”) so existing
+    /// user data is never renamed or reassigned.
+    static let supplementalDefaultRoots: [SupplementalCategoryRoot] = [
+        SupplementalCategoryRoot(name: "交通", flowType: .expense, icon: "car", color: "#3B82F6", children: [("打车", "car.side", "#60A5FA"), ("地铁公交", "tram", "#93C5FD"), ("加油停车", "fuelpump", "#BFDBFE"), ("火车机票", "airplane.departure", "#DBEAFE")]),
+        SupplementalCategoryRoot(name: "娱乐", flowType: .expense, icon: "gamecontroller", color: "#EC4899", children: [("电影演出", "popcorn", "#F472B6"), ("游戏", "gamecontroller.fill", "#F9A8D4"), ("旅行", "airplane", "#FBCFE8"), ("休闲玩乐", "party.popper", "#F9A8D4"), ("运动健身", "figure.run", "#F9A8D4")]),
+        SupplementalCategoryRoot(name: "学习", flowType: .expense, icon: "book", color: "#6366F1", children: [("书籍资料", "books.vertical", "#818CF8"), ("课程培训", "graduationcap", "#A5B4FC"), ("软件订阅", "rectangle.and.pencil.and.ellipsis", "#C7D2FE")]),
+        SupplementalCategoryRoot(name: "收入", flowType: .income, icon: "banknote", color: "#22C55E", children: [("工资", "wallet.pass", "#4ADE80"), ("奖金", "star.square", "#86EFAC"), ("退款入账", "arrow.uturn.backward.circle", "#86EFAC"), ("转账收入", "arrow.down.left.circle", "#DCFCE7")])
+    ]
+
     static func categoryIcon(for name: String, fallback: String) -> String {
         let icons: [String: String] = [
             "早餐": "sunrise.fill", "午餐": "fork.knife", "晚餐": "moon.fill", "夜宵": "moon.stars.fill", "外卖": "takeoutbag.and.cup.and.straw", "咖啡茶饮": "cup.and.saucer.fill", "奶茶果饮": "cup.and.saucer", "奶茶咖啡": "cup.and.saucer", "零食水果": "carrot.fill", "水果零食": "carrot", "买菜食材": "basket.fill", "买菜做饭": "basket", "吃好的": "birthday.cake.fill",
