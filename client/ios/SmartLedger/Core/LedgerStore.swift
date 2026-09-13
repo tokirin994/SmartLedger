@@ -21,6 +21,10 @@ final class LedgerStore: ObservableObject {
         didSet { UserDefaults.standard.set(cloudSyncEnabled, forKey: "smartledgerlocal.cloudSyncEnabled") }
     }
 
+    @Published var cloudSyncSchedule: CloudSyncSchedule = CloudSyncSchedule(rawValue: UserDefaults.standard.string(forKey: "smartledgerlocal.cloudSyncSchedule") ?? "periodic") ?? .periodic {
+        didSet { UserDefaults.standard.set(cloudSyncSchedule.rawValue, forKey: "smartledgerlocal.cloudSyncSchedule") }
+    }
+
     @Published var cloudAccountStatus: CloudAccountStatus = .unknown
     @Published var cloudUserRecordName: String?
     @Published var lastSyncAt: Date?
@@ -40,6 +44,8 @@ final class LedgerStore: ObservableObject {
     private var localUpdatedAt: Date?
     private var hasBootstrapped = false
     private var pendingRemoteSnapshot: PersistedLedgerSnapshot?
+    private var periodicSyncTask: Task<Void, Never>?
+    private var lastSyncedFingerprint: String? = UserDefaults.standard.string(forKey: "smartledgerlocal.lastSyncedFingerprint")
 
     private var nextTransactionId = 1000
     private var nextBookId = 100
@@ -88,7 +94,10 @@ final class LedgerStore: ObservableObject {
         refreshDerivedData()
 
         if cloudSyncEnabled {
-            await smartSync(showSuccessMessage: false)
+            if cloudSyncSchedule != .onChange {
+                await smartSync(showSuccessMessage: false)
+            }
+            configureScheduledSyncIfNeeded()
         } else {
             lastSyncMessage = "当前仅本地模式"
         }
@@ -436,7 +445,7 @@ final class LedgerStore: ObservableObject {
     guard let book = books.first(where: { $0.id == bookId }) else { return }
     let matching = transactions.indices.filter { index in
       let tx = transactions[index]
-      guard shouldAutoCollect(into: book, date: tx.happenedAt, categoryId: tx.categoryId) else { return false }
+      guard shouldAutoCollect(into: book, date: tx.happenedAt, categoryId: tx.categoryId, kind: tx.kind) else { return false }
       if includeAlreadyAssignedOnly {
         return !tx.bookIds.isEmpty || tx.bookId != nil
       }
@@ -472,7 +481,7 @@ final class LedgerStore: ObservableObject {
     if removeNonMatchingExisting {
       for index in transactions.indices where transactions[index].bookIds.contains(bookId) || transactions[index].bookId == bookId {
         let transaction = transactions[index]
-        guard !shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId) else { continue }
+        guard !shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId, kind: transaction.kind) else { continue }
         var ids = transaction.bookIds
         var names = transaction.bookNames
         if let position = ids.firstIndex(of: bookId) {
@@ -487,7 +496,7 @@ final class LedgerStore: ObservableObject {
       for index in transactions.indices {
         let transaction = transactions[index]
         guard !transaction.bookIds.contains(bookId),
-              shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId) else { continue }
+              shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId, kind: transaction.kind) else { continue }
         var ids = transaction.bookIds
         var names = transaction.bookNames
         ids.append(bookId)
@@ -690,9 +699,13 @@ final class LedgerStore: ObservableObject {
     recommendedBooks(for: date).first
   }
 
-  func shouldAutoCollect(into book: LedgerBook, date: Date, categoryId: Int? = nil) -> Bool {
+  func shouldAutoCollect(into book: LedgerBook, date: Date, categoryId: Int? = nil, kind: FlowType? = nil) -> Bool {
     guard book.autoCollectEnabled, matchesBookDateRange(book, date: date) else { return false }
     guard !book.autoCollectCategoryIds.isEmpty else { return true }
+    // Negative IDs are stable rule tokens instead of category IDs. They avoid
+    // fabricating visible categories just to represent “all expenses/income”.
+    if book.autoCollectCategoryIds.contains(-1), kind == .expense { return true }
+    if book.autoCollectCategoryIds.contains(-2), kind == .income { return true }
     guard let categoryId else { return false }
     return matchesAutoCollectCategory(book: book, transactionCategoryId: categoryId)
   }
@@ -711,6 +724,7 @@ final class LedgerStore: ObservableObject {
         do {
             try await localStore.save(pendingRemoteSnapshot)
             localUpdatedAt = pendingRemoteSnapshot.updatedAt
+            markSnapshotSynced(pendingRemoteSnapshot)
             lastSyncAt = Date()
             lastSyncMessage = "已采用 iCloud 版本覆盖本地"
             syncState = .success
@@ -804,13 +818,18 @@ final class LedgerStore: ObservableObject {
             let localSnapshot = currentSnapshot(markUpdatedAt: false)
             let remoteSnapshot = try await cloudStore.fetchSnapshot()
             if let remoteSnapshot {
-                let interval = abs(remoteSnapshot.updatedAt.timeIntervalSince(localSnapshot.updatedAt))
-                // 冲突检测必须覆盖整份账本快照，不能只比较流水；否则两端同时
-                // 修改分类、预算或账本时会被误判为“已一致”。
-                let diverged = remoteSnapshot.updatedAt != localSnapshot.updatedAt
-                    && snapshotContentData(remoteSnapshot) != snapshotContentData(localSnapshot)
-
-                if diverged && interval < 300 {
+                let localFingerprint = snapshotContentFingerprint(localSnapshot)
+                let remoteFingerprint = snapshotContentFingerprint(remoteSnapshot)
+                if localFingerprint == remoteFingerprint {
+                    markSnapshotSynced(localSnapshot)
+                    lastSyncAt = Date()
+                    lastSyncMessage = "本地与坚果云已一致"
+                } else if let lastSyncedFingerprint,
+                          localFingerprint != lastSyncedFingerprint,
+                          remoteFingerprint != lastSyncedFingerprint {
+                    // A real conflict means both sides changed since their shared base.
+                    // Timestamp proximity alone caused normal consecutive saves to be
+                    // incorrectly presented as conflicts.
                     pendingRemoteSnapshot = remoteSnapshot
                     pendingSyncConflict = SyncConflictSummary(
                         localUpdatedAt: localSnapshot.updatedAt,
@@ -822,29 +841,29 @@ final class LedgerStore: ObservableObject {
                     )
                     lastSyncMessage = "检测到本地与坚果云同时有更新，请选择保留哪一份"
                     syncState = .conflict
-                } else if remoteSnapshot.updatedAt > localSnapshot.updatedAt {
+                } else if localFingerprint == lastSyncedFingerprint || remoteSnapshot.updatedAt > localSnapshot.updatedAt {
                     apply(remoteSnapshot)
                     refreshDerivedData()
                     localUpdatedAt = remoteSnapshot.updatedAt
                     try await localStore.save(remoteSnapshot)
+                    markSnapshotSynced(remoteSnapshot)
                     lastSyncAt = Date()
                     lastSyncMessage = "已从坚果云拉取最新数据"
-                } else if remoteSnapshot.updatedAt < localSnapshot.updatedAt {
+                } else {
                     let pushedSnapshot = currentSnapshot(markUpdatedAt: true)
                     try await cloudStore.pushSnapshot(pushedSnapshot)
                     try await localStore.save(pushedSnapshot)
                     localUpdatedAt = pushedSnapshot.updatedAt
+                    markSnapshotSynced(pushedSnapshot)
                     lastSyncAt = Date()
                     lastSyncMessage = "已将本地更新推送到坚果云"
-                } else {
-                    lastSyncAt = Date()
-                    lastSyncMessage = "本地与坚果云已一致"
                 }
             } else {
                 let pushedSnapshot = currentSnapshot(markUpdatedAt: true)
                 try await cloudStore.pushSnapshot(pushedSnapshot)
                 try await localStore.save(pushedSnapshot)
                 localUpdatedAt = pushedSnapshot.updatedAt
+                markSnapshotSynced(pushedSnapshot)
                 lastSyncAt = Date()
                 lastSyncMessage = "已初始化坚果云账本快照"
             }
@@ -876,6 +895,7 @@ final class LedgerStore: ObservableObject {
             try await localStore.save(snapshot)
             apply(snapshot)
             localUpdatedAt = snapshot.updatedAt
+            markSnapshotSynced(snapshot)
             lastSyncAt = Date()
             lastSyncMessage = "已手动推送到坚果云"
             syncState = .success
@@ -903,6 +923,7 @@ final class LedgerStore: ObservableObject {
             refreshDerivedData()
             try await localStore.save(remote)
             localUpdatedAt = remote.updatedAt
+            markSnapshotSynced(remote)
             lastSyncAt = Date()
             lastSyncMessage = "已从坚果云拉取最新数据"
             syncState = .success
@@ -917,12 +938,28 @@ final class LedgerStore: ObservableObject {
         cloudSyncEnabled = enabled
         if enabled {
             lastSyncMessage = "已开启坚果云同步，准备检查 WebDAV 状态"
-            await smartSync(showSuccessMessage: false)
+            if cloudSyncSchedule != .onChange {
+                await smartSync(showSuccessMessage: false)
+            }
+            configureScheduledSyncIfNeeded()
         } else {
+            periodicSyncTask?.cancel()
+            periodicSyncTask = nil
             syncState = .idle
             cloudAccountStatus = .unknown
             cloudUserRecordName = nil
             lastSyncMessage = "当前仅本地模式"
+        }
+    }
+
+    func updateCloudSyncSchedule(_ schedule: CloudSyncSchedule) async {
+        cloudSyncSchedule = schedule
+        configureScheduledSyncIfNeeded()
+        guard cloudSyncEnabled else { return }
+        if schedule == .periodic || schedule == .onAppOpen {
+            await smartSync(showSuccessMessage: false)
+        } else {
+            lastSyncMessage = "已设置为每次保存后同步"
         }
     }
 
@@ -1047,7 +1084,7 @@ final class LedgerStore: ObservableObject {
         if !explicitlySelectedIds.isEmpty {
             return books.filter { explicitlySelectedIds.contains($0.id) }
         }
-        let autoCollected = recommendedBooks(for: draft.happenedAt).filter { shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId) }
+        let autoCollected = recommendedBooks(for: draft.happenedAt).filter { shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId, kind: draft.kind) }
         guard !autoCollected.isEmpty else {
             return []
         }
@@ -1127,6 +1164,36 @@ final class LedgerStore: ObservableObject {
         return try? JSONEncoder.iso8601.encode(content)
     }
 
+    private func snapshotContentFingerprint(_ snapshot: PersistedLedgerSnapshot) -> String {
+        let data = snapshotContentData(snapshot) ?? Data()
+        // Stable FNV-1a fingerprint; it is a sync base marker, not a security hash.
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private func markSnapshotSynced(_ snapshot: PersistedLedgerSnapshot) {
+        let fingerprint = snapshotContentFingerprint(snapshot)
+        lastSyncedFingerprint = fingerprint
+        UserDefaults.standard.set(fingerprint, forKey: "smartledgerlocal.lastSyncedFingerprint")
+    }
+
+    private func configureScheduledSyncIfNeeded() {
+        periodicSyncTask?.cancel()
+        periodicSyncTask = nil
+        guard cloudSyncEnabled, cloudSyncSchedule == .periodic else { return }
+        periodicSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 900_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.smartSync(showSuccessMessage: false)
+            }
+        }
+    }
+
     private func apply(_ snapshot: PersistedLedgerSnapshot) {
         categories = snapshot.categories
         books = snapshot.books
@@ -1147,7 +1214,11 @@ final class LedgerStore: ObservableObject {
             errorMessage = "保存本地数据失败: \(error.localizedDescription)"
         }
         await refreshDashboard(range: activeRangePreset, granularity: activeGranularity)
-        if cloudSyncEnabled { await smartSync(showSuccessMessage: false) }
+        if cloudSyncEnabled && cloudSyncSchedule == .onChange {
+            await smartSync(showSuccessMessage: false)
+        } else if cloudSyncEnabled {
+            lastSyncMessage = "\(reason)，将按\(cloudSyncSchedule.title)同步"
+        }
     }
 
     private func persistLocalSnapshot(markUpdatedAt: Bool) async throws {

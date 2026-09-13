@@ -36,6 +36,16 @@ struct SettingsView: View {
                     if store.syncState == .syncing || store.syncState == .checking { ProgressView() }
                 }
                 if let time = store.lastSyncAt { LabeledContent("最近同步", value: time.formatted(date: .abbreviated, time: .shortened)) }
+                Picker("自动同步", selection: Binding(get: { store.cloudSyncSchedule }, set: { schedule in
+                    Task { await store.updateCloudSyncSchedule(schedule) }
+                })) {
+                    ForEach(CloudSyncSchedule.allCases) { schedule in
+                        Text(schedule.title).tag(schedule)
+                    }
+                }
+                Text(store.cloudSyncSchedule.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 DisclosureGroup("配置与诊断", isExpanded: $cloudConfigurationExpanded) {
                     TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
@@ -51,6 +61,9 @@ struct SettingsView: View {
                         Button("仅从坚果云拉取") { Task { await store.pullFromCloud() } }
                     }
                     .disabled(!cloudEnabled || !settings.jianguoyunConfigured || store.syncState == .syncing)
+                    Text("同步会记录最近一次双方一致的内容版本。只有本地和云端都在该版本之后发生变更时，才会提示冲突；连续保存不会再被误判为冲突。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 if let conflict = store.pendingSyncConflict {
                     VStack(alignment: .leading, spacing: 8) {

@@ -337,9 +337,9 @@ private struct BookEditorView: View {
                         if enabled && !hasDateRange { showDateRangeRequiredAlert = true } else if enabled && !autoCollectEnabled { showAutoCollectSetup = true } else { autoCollectEnabled = enabled }
                     }))
                     if autoCollectEnabled {
-                        Text("匹配账本时间范围内的收入与支出流水；未选分类表示全部收支分类。") .font(.caption).foregroundStyle(.secondary)
+                        Text("匹配账本时间范围内的流水；可归集全部收支、全部支出、全部收入或指定分类。") .font(.caption).foregroundStyle(.secondary)
                         Button { showAutoCollectSetup = true } label: {
-                            LabeledContent("自动归集分类", value: selectedCategoryIDs.isEmpty ? "全部收支分类" : "已选 \(selectedCategoryIDs.count) 项")
+                            LabeledContent("自动归集分类", value: autoCollectCategorySummary)
                         }
                         .buttonStyle(.plain)
                     }
@@ -475,6 +475,13 @@ private struct BookEditorView: View {
         collectUnassignedNow = true
         showDateRangeCollectionPrompt = true
     }
+
+    private var autoCollectCategorySummary: String {
+        if selectedCategoryIDs.isEmpty { return "全部收支" }
+        if selectedCategoryIDs == [-1] { return "全部支出" }
+        if selectedCategoryIDs == [-2] { return "全部收入" }
+        return "已选 \(selectedCategoryIDs.filter { $0 > 0 }.count) 项"
+    }
 }
 private struct BookAutoCollectCategoryPicker: View {
     @EnvironmentObject private var store: LedgerStore
@@ -499,10 +506,14 @@ private struct BookAutoCollectCategoryPicker: View {
     var body: some View {
         List {
             Section {
-                Button("全部收支分类") { selectedIDs.removeAll() }
+                Button("全部收支") { selectedIDs.removeAll() }
                     .foregroundStyle(selectedIDs.isEmpty ? .blue : .primary)
+                Button("全部支出") { selectedIDs = [-1] }
+                    .foregroundStyle(selectedIDs == [-1] ? .blue : .primary)
+                Button("全部收入") { selectedIDs = [-2] }
+                    .foregroundStyle(selectedIDs == [-2] ? .blue : .primary)
             } header: {
-                Text("不选择类别时，收入和支出都会归集")
+                Text("选择“全部支出”或“全部收入”会按收支类型归集；选择分类时仅归集对应分类。")
             }
 
             Section {
@@ -595,6 +606,8 @@ private struct BookAutoCollectCategoryPicker: View {
     }
 
     private func toggleRoot(_ root: LedgerCategory) {
+        selectedIDs.remove(-1)
+        selectedIDs.remove(-2)
         if selectedIDs.contains(root.id) {
             selectedIDs.remove(root.id)
         } else {
@@ -605,6 +618,8 @@ private struct BookAutoCollectCategoryPicker: View {
     }
 
     private func toggleChild(_ child: LedgerCategory) {
+        selectedIDs.remove(-1)
+        selectedIDs.remove(-2)
         if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
     }
 }

@@ -40,6 +40,30 @@ enum SyncState: String, Codable, Sendable {
     }
 }
 
+enum CloudSyncSchedule: String, CaseIterable, Identifiable, Codable, Sendable {
+    case onChange
+    case periodic
+    case onAppOpen
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .onChange: return "每次变更后"
+        case .periodic: return "定时同步"
+        case .onAppOpen: return "打开 App 时"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .onChange: return "保存后自动同步，适合单设备或网络稳定时使用"
+        case .periodic: return "App 保持打开期间每 15 分钟检查一次，并在启动时检查"
+        case .onAppOpen: return "仅在打开 App 时检查；可随时手动同步"
+        }
+    }
+}
+
 struct SyncConflictSummary: Codable, Sendable {
     let localUpdatedAt: Date
     let remoteUpdatedAt: Date

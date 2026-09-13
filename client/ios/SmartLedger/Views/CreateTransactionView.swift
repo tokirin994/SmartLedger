@@ -318,7 +318,7 @@ private func applyRecommendedBooksBeforeSave() {
     }
 
     let autoCollectBooks = store.recommendedBooks(for: draft.happenedAt)
-        .filter { store.shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId) }
+        .filter { store.shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId, kind: draft.kind) }
 
     for book in autoCollectBooks where !draft.bookIds.contains(book.id) {
         draft.bookIds.append(book.id)
@@ -1107,4 +1107,3 @@ private struct DismissAttemptObserver: UIViewControllerRepresentable {
         }
     }
 }
-
