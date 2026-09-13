@@ -805,7 +805,7 @@ struct HierarchicalCategoryPicker: View {
     @Binding var selectedCategoryId: Int?
     let flowType: FlowType
     let onCreateCategory: ((Int?) -> Void)?
-    /// 分类编辑时只允许选择一级分类作为父级，避免把叶子二级分类再嵌套成第三级。
+    /// 叶子节点会直接完成选择；有子节点时才进入下一级。
     var allowsDescendantSelection: Bool = true
     
     @State private var isPresenting = false
@@ -1058,7 +1058,7 @@ private struct CategoryNodeSelectionView: View {
 
     @ViewBuilder
     private func childRow(_ child: LedgerCategory) -> some View {
-        // 二级“外卖”等叶子分类点按后直接回填，不产生空的第三层页面。
+        // “外卖”等叶子分类点按后直接回填，不产生空的额外层级页面。
         if child.children.isEmpty || !allowsDescendantSelection {
             Button {
                 selectedCategoryId = child.id

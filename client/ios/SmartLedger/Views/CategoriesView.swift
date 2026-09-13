@@ -143,10 +143,9 @@ struct CategoryEditorView: View {
                         helperText: nil,
                         selectedCategoryId: $parentId,
                         flowType: flowType,
-                        onCreateCategory: nil,
-                        allowsDescendantSelection: false
+                        onCreateCategory: nil
                     )
-                    Text("一级分类下可直接创建二级分类；二级分类为最终分类，不再继续嵌套。")
+                    Text("可选择任意已有分类作为上级；没有子分类的项目会直接选中，不显示空层级。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
