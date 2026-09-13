@@ -15,9 +15,30 @@ struct OCRImportService {
           return
         }
 
+        // Vision 不保证 observations 的返回顺序。账单截图通常是双列布局（左侧标题、
+        // 右侧金额），必须先按视觉坐标重建阅读顺序，否则标题、日期和金额会错配。
         let observations = request.results as? [VNRecognizedTextObservation] ?? []
-        let lines = observations.compactMap { $0.topCandidates(1).first?.string }
-        continuation.resume(returning: lines.joined(separator: "\n"))
+        let fragments = observations.compactMap { observation -> (text: String, box: CGRect)? in
+          guard let text = observation.topCandidates(1).first?.string else { return nil }
+          return (text, observation.boundingBox)
+        }
+        .sorted { lhs, rhs in
+          if abs(lhs.box.midY - rhs.box.midY) > 0.012 {
+            return lhs.box.midY > rhs.box.midY
+          }
+          return lhs.box.minX < rhs.box.minX
+        }
+
+        var visualRows: [(midY: CGFloat, texts: [String])] = []
+        for fragment in fragments {
+          if let lastIndex = visualRows.indices.last,
+             abs(visualRows[lastIndex].midY - fragment.box.midY) <= 0.012 {
+            visualRows[lastIndex].texts.append(fragment.text)
+          } else {
+            visualRows.append((fragment.box.midY, [fragment.text]))
+          }
+        }
+        continuation.resume(returning: visualRows.map { $0.texts.joined(separator: "    ") }.joined(separator: "\n"))
       }
 
       request.recognitionLevel = .accurate

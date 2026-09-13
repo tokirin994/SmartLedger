@@ -45,14 +45,6 @@ struct ImportReceiptView: View {
         ProgressView("正在识别截图...")
     }
     
-    if !recognizedText.isEmpty {
-        SectionCard(title: "OCR 原文") {
-            Text(recognizedText)
-                .font(.footnote.monospaced())
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     Group {
         if store.parsedImportItems.count > 1 {
             batchImportSection
