@@ -27,8 +27,8 @@ struct CategoriesView: View {
                 .padding(.top)
 
                 List {
-                    ForEach(filteredRoots) { category in
-                        CategoryNodeView(category: category)
+                    ForEach(categoryRows) { entry in
+                        CategoryListRow(category: entry.category, depth: entry.depth)
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -72,6 +72,19 @@ struct CategoriesView: View {
         filteredRoots.map { $0.flattened().count }.reduce(0, +)
     }
 
+    /// 每一个分类都是 List 中的独立行，二级及更深分类通过缩进表达层级，
+    /// 从而保证任意分类都能正常左滑操作。
+    private var categoryRows: [CategoryListEntry] {
+        flattenedRows(from: filteredRoots)
+    }
+
+    private func flattenedRows(from nodes: [LedgerCategory], depth: Int = 0) -> [CategoryListEntry] {
+        nodes.flatMap { category in
+            [CategoryListEntry(category: category, depth: depth)]
+                + flattenedRows(from: category.children, depth: depth + 1)
+        }
+    }
+
     private func categoryMatches(_ category: LedgerCategory) -> Bool {
         let keyword = searchText.lowercased()
         if keyword.isEmpty { return true }
@@ -91,6 +104,12 @@ struct CategoriesView: View {
         .padding(14)
         .glassCard(cornerRadius: 18, strokeOpacity: 0.22)
     }
+}
+
+private struct CategoryListEntry: Identifiable {
+    let category: LedgerCategory
+    let depth: Int
+    var id: Int { category.id }
 }
 
 struct CategoryEditorView: View {
@@ -315,35 +334,23 @@ struct CategoryEditorView: View {
     }
 }
 
-private struct CategoryNodeView: View {
+private struct CategoryListRow: View {
     @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
+    let depth: Int
     @State private var deletionMessage: String?
 
     var body: some View {
-        Group {
-            if category.children.isEmpty {
-                row(for: category)
-            } else {
-                DisclosureGroup {
-                    VStack(spacing: 6) {
-                        ForEach(category.children) { child in
-                            if child.children.isEmpty {
-                                row(for: child)
-                            } else {
-                                CategoryNodeView(category: child)
-                            }
-                        }
-                    }
-                    .padding(.top, 6)
-                    .padding(.leading, 10)
+        row
+            .padding(12)
+            .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    delete(category)
                 } label: {
-                    row(for: category)
+                    Label("删除", systemImage: "trash")
                 }
             }
-        }
-        .padding(12)
-        .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .alert("无法删除分类", isPresented: deletionAlertPresented) {
             Button("知道了", role: .cancel) {
                 deletionMessage = nil
@@ -356,30 +363,35 @@ private struct CategoryNodeView: View {
         }
     }
 
-    private func row(for item: LedgerCategory) -> some View {
+    private var row: some View {
         HStack {
+            if depth > 0 {
+                Color.clear
+                    .frame(width: CGFloat(min(depth, 4)) * 16)
+            }
+
             ZStack {
                 Circle()
-                    .fill(item.flowType == .expense ? Color.orange : Color.green)
+                    .fill(category.flowType == .expense ? Color.orange : Color.green)
                     .opacity(0.12)
-                Image(systemName: item.icon ?? "folder")
-                    .foregroundStyle(item.flowType == .expense ? .orange : .green)
+                Image(systemName: category.icon ?? "folder")
+                    .foregroundStyle(category.flowType == .expense ? .orange : .green)
                     .frame(width: 28)
 
             }
             .frame(width: 34, height: 34)
 
             VStack(alignment: .leading) {
-                Text(item.displayName)
+                Text(category.displayName)
                     .font(.body.weight(.medium))
-                Text("\(item.flowType.title) · 第 \(item.level) 级")
+                Text("\(category.flowType.title) · 第 \(category.level) 级")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            if item.children.isEmpty {
+            if category.children.isEmpty {
                 Text("叶子")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -389,13 +401,6 @@ private struct CategoryNodeView: View {
             }
         }
         .padding(.vertical, 1)
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                delete(item)
-            } label: {
-                Label("删除", systemImage: "trash")
-            }
-        }
     }
 
     private var deletionAlertPresented: Binding<Bool> {
