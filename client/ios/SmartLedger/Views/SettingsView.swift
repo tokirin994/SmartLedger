@@ -46,15 +46,6 @@ struct SettingsView: View {
                 Text(store.cloudSyncSchedule.detail)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                DisclosureGroup("三种同步方式说明") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("每次变更后：本地先保存，再立即比对并推送/拉取；只有双方都在同一版本后改动才需要处理冲突。")
-                        Text("定时同步：启动时检查，App 保持前台期间每 15 分钟检查；离线期间继续本地保存，下次检查再结算。")
-                        Text("打开 App 时：每次启动比对一次，其他时间仅本地保存；“智能同步”按钮可随时立即完成一次完整的拉取/推送判定。")
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
                 DisclosureGroup("配置与诊断", isExpanded: $cloudConfigurationExpanded) {
                     TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)

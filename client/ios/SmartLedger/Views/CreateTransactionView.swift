@@ -181,11 +181,17 @@ struct CreateTransactionView: View {
 
                     if draft.kind == .expense {
                         Section("抵扣 / 报销") {
-                            Toggle("保存时生成抵扣收入", isOn: $draft.offsetEnabled)
-                            if draft.offsetEnabled {
+                            if !draft.offsetEnabled {
+                                Button {
+                                    draft.offsetEnabled = true
+                                    draft.offsetCategoryId = preferredOffsetCategoryID
+                                } label: {
+                                    Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
+                                }
+                            } else {
                                 Picker("收入分类", selection: $draft.offsetCategoryId) {
-                                    Text("请选择报销或退款").tag(Int?.none)
-                                    ForEach(store.flattenedCategories.filter { $0.flowType == .income && ($0.displayName.contains("报销") || $0.displayName.contains("退款")) }) { category in
+                                    Text("请选择收入分类").tag(Int?.none)
+                                    ForEach(store.flattenedCategories.filter { $0.flowType == .income }) { category in
                                         Text(category.displayName).tag(Int?.some(category.id))
                                     }
                                 }
@@ -194,8 +200,12 @@ struct CreateTransactionView: View {
                                     Slider(value: $draft.offsetRatio, in: 0...100, step: 1)
                                     Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 44, alignment: .trailing)
                                 }
-                                Text("会生成一笔同日期、同账本、同支付方式的收入流水。")
-                                    .font(.footnote).foregroundStyle(.secondary)
+                                LabeledContent("预计生成收入", value: offsetGeneratedAmount.cnyText)
+                                    .font(.subheadline.weight(.semibold))
+                                Button("移除抵扣", role: .destructive) {
+                                    draft.offsetEnabled = false
+                                    draft.offsetCategoryId = nil
+                                }
                             }
                         }
                     }
@@ -322,6 +332,17 @@ struct CreateTransactionView: View {
 private var selectedBookNamesText: String {
     let names = selectedBooks.map(\.name)
     return names.isEmpty ? "不归属于主题账本" : names.joined(separator: "、")
+}
+
+private var preferredOffsetCategoryID: Int? {
+    let income = store.flattenedCategories.filter { $0.flowType == .income }
+    return income.first(where: { $0.displayName.contains("报销") })?.id
+        ?? income.first(where: { $0.displayName.contains("退款") })?.id
+        ?? income.first?.id
+}
+
+private var offsetGeneratedAmount: Double {
+    ((Double(draft.amount) ?? 0) * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
 }
 
 private var selectedCategoryDisplayName: String {

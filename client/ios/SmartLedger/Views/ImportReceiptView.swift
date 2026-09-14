@@ -240,17 +240,24 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
         }
         if draft.kind == .expense {
-            Toggle("生成抵扣收入", isOn: $draft.offsetEnabled)
-            if draft.offsetEnabled {
+            if !draft.offsetEnabled {
+                Button {
+                    draft.offsetEnabled = true
+                    draft.offsetCategoryId = preferredOCRIncomeCategoryID
+                } label: {
+                    Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
+                }
+            } else {
                 Picker("抵扣类型", selection: $draft.offsetCategoryId) {
-                    Text("请选择报销或退款").tag(Int?.none)
-                    ForEach(store.flattenedCategories.filter { $0.flowType == .income && ($0.displayName.contains("报销") || $0.displayName.contains("退款")) }) { category in
+                    Text("请选择收入分类").tag(Int?.none)
+                    ForEach(store.flattenedCategories.filter { $0.flowType == .income }) { category in
                         Text(category.displayName).tag(Int?.some(category.id))
                     }
                 }
                 HStack { Text("抵扣比例"); Slider(value: $draft.offsetRatio, in: 0...100, step: 1); Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 42, alignment: .trailing) }
-                Text("保存时额外生成一笔相同时间、账本和支付方式的收入流水。")
-                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("预计生成收入", value: ocrOffsetAmount.cnyText)
+                    .font(.subheadline.weight(.semibold))
+                Button("移除抵扣", role: .destructive) { draft.offsetEnabled = false; draft.offsetCategoryId = nil }
             }
         }
         GroupBox("高级信息") {
@@ -296,6 +303,17 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             draft.installmentMonths = 1
         }
     }
+}
+
+private var preferredOCRIncomeCategoryID: Int? {
+    let income = store.flattenedCategories.filter { $0.flowType == .income }
+    return income.first(where: { $0.displayName.contains("报销") })?.id
+        ?? income.first(where: { $0.displayName.contains("退款") })?.id
+        ?? income.first?.id
+}
+
+private var ocrOffsetAmount: Double {
+    ((Double(draft.amount) ?? 0) * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
 }
 
 private func applyParsedDefaults(parsed: OCRImportResult) {

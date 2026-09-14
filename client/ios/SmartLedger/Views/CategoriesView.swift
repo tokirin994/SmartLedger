@@ -27,6 +27,11 @@ struct CategoriesView: View {
                 .padding(.top)
 
                 List {
+                    Color.clear
+                        .frame(height: 6)
+                        .listRowInsets(.init())
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     // OutlineGroup 生成真正的层级列表行：默认折叠，展开后每个子项仍可独立左滑。
                     OutlineGroup(filteredRoots, children: \.outlineChildren) { category in
                         CategoryListRow(category: category)
@@ -35,7 +40,7 @@ struct CategoriesView: View {
                             .listRowSeparator(.hidden)
                     }
                 }
-                .listStyle(.insetGrouped)
+                .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .appBackdrop()
             }
@@ -338,8 +343,9 @@ private struct CategoryListRow: View {
 
     var body: some View {
         row
-            .padding(12)
-            .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(categoryBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button { showEditSheet = true } label: { Label("修改", systemImage: "pencil") }
                     .tint(.blue)
@@ -370,10 +376,10 @@ private struct CategoryListRow: View {
         HStack {
             ZStack {
                 Circle()
-                    .fill(category.flowType == .expense ? Color.orange : Color.green)
+                    .fill(categoryColor)
                     .opacity(0.12)
                 Image(systemName: category.icon ?? "folder")
-                    .foregroundStyle(category.flowType == .expense ? .orange : .green)
+                    .foregroundStyle(categoryColor)
                     .frame(width: 28)
 
             }
@@ -389,16 +395,14 @@ private struct CategoryListRow: View {
 
             Spacer()
 
-            if category.children.isEmpty {
-                Text("叶子")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color(UIColor.tertiarySystemBackground), in: Capsule())
-            }
         }
         .padding(.vertical, 1)
+    }
+
+    private var categoryColor: Color { Color(hex: category.color ?? (category.flowType == .expense ? "#F59E0B" : "#22C55E")) }
+
+    private var categoryBackground: Color {
+        category.children.isEmpty ? Color(UIColor.secondarySystemBackground) : categoryColor.opacity(0.12)
     }
 
     private var deletionAlertPresented: Binding<Bool> {
@@ -424,8 +428,3 @@ private struct CreateCategoryView: View {
         CategoryEditorSheet()
     }
 }
-// Duplicate declaration removed; the private view above is the sheet entry point.
-/*
-    }
-}
-*/
