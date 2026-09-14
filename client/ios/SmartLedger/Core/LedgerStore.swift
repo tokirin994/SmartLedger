@@ -46,6 +46,10 @@ final class LedgerStore: ObservableObject {
     private var pendingRemoteSnapshot: PersistedLedgerSnapshot?
     private var periodicSyncTask: Task<Void, Never>?
     private var lastSyncedFingerprint: String? = UserDefaults.standard.string(forKey: "smartledgerlocal.lastSyncedFingerprint")
+    private var lastSyncedSnapshotUpdatedAt: Date? = {
+        let stamp = UserDefaults.standard.double(forKey: "smartledgerlocal.lastSyncedSnapshotUpdatedAt")
+        return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
+    }()
 
     private var nextTransactionId = 1000
     private var nextBookId = 100
@@ -238,7 +242,27 @@ final class LedgerStore: ObservableObject {
             )
         }
 
-        nextTransactionId += months
+        // An offset is an independent income row, never a recursive draft.
+        if draft.offsetEnabled, draft.kind == .expense,
+           let offsetCategoryId = draft.offsetCategoryId,
+           let offsetCategory = flattenedCategories.first(where: { $0.id == offsetCategoryId && $0.flowType == .income }) {
+            let offsetAmount = (amount * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
+            if offsetAmount > 0 {
+                created.append(LedgerTransaction(
+                    id: nextTransactionId + created.count, title: draft.title, amount: offsetAmount, kind: .income,
+                    happenedAt: draft.happenedAt, note: draft.note.isEmpty ? "抵扣流水" : draft.note,
+                    merchant: draft.merchant.isEmpty ? nil : draft.merchant,
+                    paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod, source: draft.source, currency: "CNY",
+                    categoryId: offsetCategory.id, categoryName: resolvedCategoryName(for: offsetCategory.id),
+                    bookId: resolvedBook?.id, bookName: bookName, bookIds: resolvedBooks.map(\.id), bookNames: resolvedBooks.map(\.name),
+                    installmentGroupId: nil, installmentIndex: nil, installmentMonths: nil, installmentOriginalTotal: nil,
+                    originalAmount: nil, discountAmount: nil, premiumAmount: nil,
+                    paidByParticipantId: resolvedPayer?.id, paidByParticipantName: resolvedPayer?.name,
+                    splitParticipantIds: resolvedSplitParticipants.map(\.id), splitParticipantNames: resolvedSplitParticipants.map(\.name)
+                ))
+            }
+        }
+        nextTransactionId += created.count
         transactions = (created + transactions).sorted { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
         await persistAndMaybeSync(reason: "新增流水已保存")
@@ -623,6 +647,26 @@ final class LedgerStore: ObservableObject {
     await persistAndMaybeSync(reason: "分类已保存")
   }
 
+  /// Keeps the category ID unchanged, so existing transaction/budget bindings remain valid.
+  func updateCategory(_ categoryId: Int, draft: CategoryDraft) async {
+    let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { errorMessage = "分类名称不能为空。"; return }
+    guard let current = flattenedCategories.first(where: { $0.id == categoryId }) else { return }
+    if flattenedCategories.contains(where: { $0.id != categoryId && $0.parentId == current.parentId && $0.flowType == current.flowType && $0.pathComponents.last == name }) {
+      errorMessage = "同一上级分类下已存在“\(name)”。"
+      return
+    }
+    categories = CategoryTreeBuilder.replacing(categoryId: categoryId, in: categories) { old in
+      LedgerCategory(id: old.id, name: name, flowType: old.flowType, icon: draft.icon, color: draft.color, parentId: old.parentId, level: old.level, children: old.children)
+    }
+    transactions = transactions.map { tx in
+      guard tx.categoryId == categoryId else { return tx }
+      return rebuildTransaction(tx, bookId: tx.bookId, bookName: tx.bookName, bookIds: tx.bookIds, bookNames: tx.bookNames, categoryId: categoryId, categoryName: name, replacingCategory: true)
+    }
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "分类已修改")
+  }
+
   func deleteCategory(_ categoryId: Int) async {
     // 必须从原始树取节点；flattenedCategories 会将 children 展平为空数组。
     guard let target = categoryTreeNode(withID: categoryId, in: categories) else { return }
@@ -863,7 +907,8 @@ final class LedgerStore: ObservableObject {
                     lastSyncMessage = "本地与坚果云已一致"
                 } else if let lastSyncedFingerprint,
                           localFingerprint != lastSyncedFingerprint,
-                          remoteFingerprint != lastSyncedFingerprint {
+                          remoteFingerprint != lastSyncedFingerprint,
+                          hasBothSidesChangedSinceLastAgreement(local: localSnapshot, remote: remoteSnapshot) {
                     // A real conflict means both sides changed since their shared base.
                     // Timestamp proximity alone caused normal consecutive saves to be
                     // incorrectly presented as conflicts.
@@ -1016,8 +1061,8 @@ final class LedgerStore: ObservableObject {
 
     private func installSupplementalDefaultSubcategoriesIfNeeded() -> Bool {
         let versionKey = "smartledgerlocal.defaultCategoryCatalogVersion"
-        guard UserDefaults.standard.integer(forKey: versionKey) < 5 else { return false }
-        defer { UserDefaults.standard.set(5, forKey: versionKey) }
+        guard UserDefaults.standard.integer(forKey: versionKey) < 6 else { return false }
+        defer { UserDefaults.standard.set(6, forKey: versionKey) }
 
         var inserted = false
         for definition in DemoData.supplementalDefaultRoots {
@@ -1054,7 +1099,37 @@ final class LedgerStore: ObservableObject {
                 inserted = true
             }
         }
+        if nestDailyMealsUnderDailyDiningIfNeeded() { inserted = true }
         return inserted
+    }
+
+    private func nestDailyMealsUnderDailyDiningIfNeeded() -> Bool {
+        guard let rootIndex = categories.firstIndex(where: { $0.parentId == nil && $0.name == "餐饮" }) else { return false }
+        let mealNames: Set<String> = ["早餐", "午餐", "晚餐"]
+        var root = categories[rootIndex]
+        var children = root.children
+        let movable = children.filter { mealNames.contains($0.name) }
+        guard !movable.isEmpty else { return false }
+        let dailyIndex: Int
+        if let existing = children.firstIndex(where: { $0.name == "日常吃饭" }) {
+            dailyIndex = existing
+        } else {
+            let daily = LedgerCategory(id: nextCategoryId, name: "日常吃饭", flowType: root.flowType, icon: "takeoutbag.and.cup.and.straw", color: root.color, parentId: root.id, level: root.level + 1, children: [])
+            nextCategoryId += 1
+            children.append(daily)
+            dailyIndex = children.count - 1
+        }
+        let daily = children[dailyIndex]
+        let nested = movable.map { meal in
+            LedgerCategory(id: meal.id, name: meal.name, flowType: meal.flowType, icon: meal.icon, color: meal.color, parentId: daily.id, level: daily.level + 1, children: meal.children)
+        }
+        let updatedDaily = LedgerCategory(id: daily.id, name: daily.name, flowType: daily.flowType, icon: daily.icon, color: daily.color, parentId: daily.parentId, level: daily.level, children: daily.children + nested)
+        children.removeAll { mealNames.contains($0.name) }
+        guard let replacementIndex = children.firstIndex(where: { $0.id == daily.id }) else { return false }
+        children[replacementIndex] = updatedDaily
+        root = LedgerCategory(id: root.id, name: root.name, flowType: root.flowType, icon: root.icon, color: root.color, parentId: root.parentId, level: root.level, children: children)
+        categories[rootIndex] = root
+        return true
     }
 
     private func refreshDerivedData() {
@@ -1216,6 +1291,13 @@ final class LedgerStore: ObservableObject {
         let fingerprint = snapshotContentFingerprint(snapshot)
         lastSyncedFingerprint = fingerprint
         UserDefaults.standard.set(fingerprint, forKey: "smartledgerlocal.lastSyncedFingerprint")
+        lastSyncedSnapshotUpdatedAt = snapshot.updatedAt
+        UserDefaults.standard.set(snapshot.updatedAt.timeIntervalSince1970, forKey: "smartledgerlocal.lastSyncedSnapshotUpdatedAt")
+    }
+
+    private func hasBothSidesChangedSinceLastAgreement(local: PersistedLedgerSnapshot, remote: PersistedLedgerSnapshot) -> Bool {
+        guard let agreedAt = lastSyncedSnapshotUpdatedAt else { return false }
+        return local.updatedAt > agreedAt.addingTimeInterval(0.5) && remote.updatedAt > agreedAt.addingTimeInterval(0.5)
     }
 
     private func configureScheduledSyncIfNeeded() {
@@ -1299,6 +1381,14 @@ struct DailyFinanceSummary {
 }
 
 private enum CategoryTreeBuilder {
+    static func replacing(categoryId: Int, in tree: [LedgerCategory], transform: (LedgerCategory) -> LedgerCategory) -> [LedgerCategory] {
+        tree.map { item in
+            if item.id == categoryId { return transform(item) }
+            guard !item.children.isEmpty else { return item }
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: replacing(categoryId: categoryId, in: item.children, transform: transform))
+        }
+    }
+
     static func removing(ids: Set<Int>, from tree: [LedgerCategory]) -> [LedgerCategory] {
         tree.compactMap { item in
             guard !ids.contains(item.id) else { return nil }

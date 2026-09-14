@@ -586,6 +586,10 @@ struct TransactionDraft {
     var source: String = "manual"
     var splitParticipantIds: [String] = []
     var paidByParticipantId: String?
+    /// Draft-only options for an optional income reimbursement/refund record.
+    var offsetEnabled: Bool = false
+    var offsetCategoryId: Int?
+    var offsetRatio: Double = 100
 
     init() {}
 

@@ -171,8 +171,11 @@ enum LocalAnalytics {
     guard let categoryId = budget.categoryId else { return true }
     guard let txCategoryId = tx.categoryId else { return false }
     if txCategoryId == categoryId { return true }
-    let rootId = rootCategoryId(for: txCategoryId, categories: categories)
-    return rootId == categoryId
+    // Budgeting/statistics follow the same downward-compatible semantics as
+    // the transaction filter: selecting any category includes all descendants.
+    guard let selected = categories.first(where: { $0.id == categoryId }),
+          let transactionCategory = categories.first(where: { $0.id == txCategoryId }) else { return false }
+    return transactionCategory.pathComponents.starts(with: selected.pathComponents)
   }
 
   private static func rootCategoryName(for tx: LedgerTransaction, categories: [LedgerCategory]) -> String {

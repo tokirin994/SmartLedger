@@ -13,6 +13,7 @@ struct ImportReceiptView: View {
     @State private var selectedBatchIDs: Set<String> = []
     @State private var showClearConfirmation = false
     @State private var editingBatchItem: OCRImportResult?
+    @State private var importSaveError: String?
     private let ocrService = OCRImportService()
     
     var body: some View {
@@ -81,6 +82,11 @@ struct ImportReceiptView: View {
     Button("取消", role: .cancel) {}
 } message: {
     Text("将丢弃当前图片、识别结果和所有待确认流水，已保存的流水不会受影响。")
+}
+.alert("无法保存流水", isPresented: Binding(get: { importSaveError != nil }, set: { if !$0 { importSaveError = nil } })) {
+    Button("知道了", role: .cancel) {}
+} message: {
+    Text(importSaveError ?? "请补全标题和金额后重试。")
 }
 .sheet(item: $editingBatchItem) { item in
     OCRBatchItemEditor(item: item) { updated in
@@ -233,6 +239,20 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 1...24)
             DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
         }
+        if draft.kind == .expense {
+            Toggle("生成抵扣收入", isOn: $draft.offsetEnabled)
+            if draft.offsetEnabled {
+                Picker("抵扣类型", selection: $draft.offsetCategoryId) {
+                    Text("请选择报销或退款").tag(Int?.none)
+                    ForEach(store.flattenedCategories.filter { $0.flowType == .income && ($0.displayName.contains("报销") || $0.displayName.contains("退款")) }) { category in
+                        Text(category.displayName).tag(Int?.some(category.id))
+                    }
+                }
+                HStack { Text("抵扣比例"); Slider(value: $draft.offsetRatio, in: 0...100, step: 1); Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 42, alignment: .trailing) }
+                Text("保存时额外生成一笔相同时间、账本和支付方式的收入流水。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
         GroupBox("高级信息") {
             VStack(spacing: 12) {
                 TextField("商户", text: $draft.merchant)
@@ -247,8 +267,7 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
                 if !draft.paymentMethod.isEmpty {
                     draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
                 }
-                await store.createTransaction(draft)
-                clearImportState()
+                await saveSingleImport()
             }
         }
         .buttonStyle(.borderedProminent)
@@ -313,6 +332,11 @@ private func loadImage(from item: PhotosPickerItem) async {
 
 private func saveSelectedBatchItems() async {
     let selected = store.parsedImportItems.filter { selectedBatchIDs.contains($0.id) }
+    let invalid = selected.filter { ($0.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ($0.amount ?? 0) <= 0 }
+    guard invalid.isEmpty else {
+        importSaveError = "待确认流水中有 \(invalid.count) 笔缺少标题或有效金额，请先点击“编辑”补全后再保存。"
+        return
+    }
     for item in selected {
         var draft = TransactionDraft(parsed: item, source: "ocr")
         draft.ocrText = recognizedText
@@ -323,6 +347,32 @@ private func saveSelectedBatchItems() async {
             draft.categoryId = matched.id
         }
         await store.createTransaction(draft)
+        if let error = store.errorMessage {
+            importSaveError = "“\(draft.title)”保存失败：\(error)"
+            return
+        }
+    }
+    clearImportState()
+}
+
+private func saveSingleImport() async {
+    guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        importSaveError = "请填写流水标题。"
+        return
+    }
+    guard let amount = Double(draft.amount), amount > 0 else {
+        importSaveError = "请填写大于 0 的有效金额。"
+        return
+    }
+    if draft.offsetEnabled && draft.offsetCategoryId == nil {
+        importSaveError = "请为抵扣流水选择“报销”或“退款”分类。"
+        return
+    }
+    store.errorMessage = nil
+    await store.createTransaction(draft)
+    if let error = store.errorMessage {
+        importSaveError = error
+        return
     }
     clearImportState()
 }
@@ -351,6 +401,7 @@ private struct OCRBatchItemEditor: View {
     let item: OCRImportResult
     let onSave: (OCRImportResult) -> Void
     @State private var draft: TransactionDraft
+    @State private var validationMessage: String?
 
     init(item: OCRImportResult, onSave: @escaping (OCRImportResult) -> Void) {
         self.item = item
@@ -384,9 +435,12 @@ private struct OCRBatchItemEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
+                        let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !title.isEmpty else { validationMessage = "请填写流水标题。"; return }
+                        guard let amount = Double(draft.amount), amount > 0 else { validationMessage = "请填写大于 0 的有效金额。"; return }
                         var updated = item
-                        updated.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名流水" : draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        updated.amount = Double(draft.amount)
+                        updated.title = title
+                        updated.amount = amount
                         updated.kind = draft.kind
                         updated.happenedAt = draft.happenedAt
                         let merchant = draft.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -408,6 +462,9 @@ private struct OCRBatchItemEditor: View {
                 }
             }
             .task { if store.categories.isEmpty { await store.loadCategories() } }
+            .alert("无法保存待确认流水", isPresented: Binding(get: { validationMessage != nil }, set: { if !$0 { validationMessage = nil } })) {
+                Button("知道了", role: .cancel) {}
+            } message: { Text(validationMessage ?? "") }
         }
     }
 }

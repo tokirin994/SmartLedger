@@ -179,6 +179,27 @@ struct CreateTransactionView: View {
                         }
                     }
 
+                    if draft.kind == .expense {
+                        Section("抵扣 / 报销") {
+                            Toggle("保存时生成抵扣收入", isOn: $draft.offsetEnabled)
+                            if draft.offsetEnabled {
+                                Picker("收入分类", selection: $draft.offsetCategoryId) {
+                                    Text("请选择报销或退款").tag(Int?.none)
+                                    ForEach(store.flattenedCategories.filter { $0.flowType == .income && ($0.displayName.contains("报销") || $0.displayName.contains("退款")) }) { category in
+                                        Text(category.displayName).tag(Int?.some(category.id))
+                                    }
+                                }
+                                HStack {
+                                    Text("抵扣比例")
+                                    Slider(value: $draft.offsetRatio, in: 0...100, step: 1)
+                                    Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 44, alignment: .trailing)
+                                }
+                                Text("会生成一笔同日期、同账本、同支付方式的收入流水。")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     Section("高级字段") {
                         TextField("商户", text: $draft.merchant)
                         TextField("备注", text: $draft.note, axis: .vertical)
@@ -348,6 +369,10 @@ private func saveDraftAndDismiss() async {
     }
     guard let amount = Double(draft.amount), amount > 0 else {
         saveFailureMessage = "金额必须是大于 0 的数字。"
+        return
+    }
+    if draft.offsetEnabled && draft.offsetCategoryId == nil {
+        saveFailureMessage = "请为抵扣流水选择“报销”或“退款”收入分类。"
         return
     }
     if selectedBookSupportsSplit && draft.paidByParticipantId == nil {

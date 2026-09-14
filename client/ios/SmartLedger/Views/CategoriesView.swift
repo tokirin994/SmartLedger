@@ -108,17 +108,20 @@ struct CategoryEditorView: View {
     let title: String
     var preselectedFlowType: FlowType?
     var preselectedParentId: Int?
+    var editingCategory: LedgerCategory?
     var onCreated: ((LedgerCategory) -> Void)?
 
     init(
         title: String = "新增分类",
         preselectedFlowType: FlowType? = nil,
         preselectedParentId: Int? = nil,
+        editingCategory: LedgerCategory? = nil,
         onCreated: ((LedgerCategory) -> Void)? = nil
     ) {
         self.title = title
         self.preselectedFlowType = preselectedFlowType
         self.preselectedParentId = preselectedParentId
+        self.editingCategory = editingCategory
         self.onCreated = onCreated
     }
 
@@ -220,6 +223,13 @@ struct CategoryEditorView: View {
                 if let preselectedParentId {
                     parentId = preselectedParentId
                 }
+                if let editingCategory {
+                    name = editingCategory.displayName
+                    flowType = editingCategory.flowType
+                    parentId = editingCategory.parentId
+                    icon = editingCategory.icon ?? "folder"
+                    color = editingCategory.color ?? "#5AA38B"
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -236,7 +246,11 @@ struct CategoryEditorView: View {
                                 color: color.isEmpty ? nil : color,
                                 parentId: parentId
                             )
-                            await store.createCategory(draft)
+                            if let editingCategory {
+                                await store.updateCategory(editingCategory.id, draft: draft)
+                            } else {
+                                await store.createCategory(draft)
+                            }
                             if let error = store.errorMessage {
                                 saveFailureMessage = error
                                 return
@@ -320,12 +334,15 @@ private struct CategoryListRow: View {
     @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
     @State private var deletionMessage: String?
+    @State private var showEditSheet = false
 
     var body: some View {
         row
             .padding(12)
             .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button { showEditSheet = true } label: { Label("修改", systemImage: "pencil") }
+                    .tint(.blue)
                 Button(role: .destructive) {
                     delete(category)
                 } label: {
@@ -340,7 +357,12 @@ private struct CategoryListRow: View {
             Text(deletionMessage ?? "")
         }
         .contextMenu {
+            Button { showEditSheet = true } label: { Label("修改分类", systemImage: "pencil") }
             Button(role: .destructive) { delete(category) } label: { Label("删除分类", systemImage: "trash") }
+        }
+        .sheet(isPresented: $showEditSheet) {
+            CategoryEditorView(title: "修改分类", editingCategory: category)
+                .environmentObject(store)
         }
     }
 
