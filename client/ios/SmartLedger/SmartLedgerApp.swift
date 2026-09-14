@@ -11,6 +11,7 @@ struct SmartLedgerApp: App {
                 .environmentObject(store)
                 .environmentObject(settings)
                 .preferredColorScheme(settings.preferredColorScheme)
+                .dismissKeyboardWhenTappedOutside()
                 .task {
                     await store.bootstrapIfNeeded()
                 }

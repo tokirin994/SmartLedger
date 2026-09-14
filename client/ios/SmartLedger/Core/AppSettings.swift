@@ -334,12 +334,31 @@ struct AppBackdrop: View {
 }
 
 extension View {
+    /// Keeps editing lightweight throughout the app: a tap on any other UI
+    /// surface dismisses the current text input without consuming that tap.
+    /// `simultaneousGesture` deliberately preserves buttons, navigation links,
+    /// pickers and scrolling behaviour.
+    func dismissKeyboardWhenTappedOutside() -> some View {
+        simultaneousGesture(
+            TapGesture().onEnded {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil,
+                    from: nil,
+                    for: nil
+                )
+            }
+        )
+    }
+
     func appBackground() -> some View {
         background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .dismissKeyboardWhenTappedOutside()
     }
 
     func appBackdrop() -> some View {
         background(AppBackdrop())
+            .dismissKeyboardWhenTappedOutside()
     }
 
     func glassCard(cornerRadius: CGFloat = 22, strokeOpacity: Double = 0.26) -> some View {
