@@ -55,6 +55,8 @@ final class LedgerStore: ObservableObject {
     private var nextBookId = 100
     private var nextCategoryId = 1000
     private var nextBudgetId = 100
+    private var inFlightSaveKeys: Set<String> = []
+    private var recentlyCompletedSaveKeys: [String: Date] = [:]
 
     func bootstrap() async {
         guard !hasBootstrapped else { return }
@@ -168,6 +170,9 @@ final class LedgerStore: ObservableObject {
     }
 
     func createTransaction(_ draft: TransactionDraft) async {
+        let saveKey = "transaction|\(draft.kind.rawValue)|\(draft.title.trimmingCharacters(in: .whitespacesAndNewlines))|\(draft.amount)|\(draft.happenedAt.timeIntervalSince1970.rounded())|\(draft.categoryId ?? -1)|\(draft.bookIds.sorted())"
+        guard beginSave(key: saveKey) else { return }
+        defer { endSave(key: saveKey) }
         guard let amount = Double(draft.amount), !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             errorMessage = "请填写有效的标题和金额"
@@ -266,6 +271,7 @@ final class LedgerStore: ObservableObject {
         transactions = (created + transactions).sorted { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
         await persistAndMaybeSync(reason: "新增流水已保存")
+        completeSave(key: saveKey)
     }
 
     func updateTransaction(_ id: Int, with draft: TransactionDraft) async {
@@ -337,6 +343,9 @@ final class LedgerStore: ObservableObject {
 
     @discardableResult
     func createBook(_ draft: BookDraft) async -> Int {
+        let saveKey = "book|\(draft.name.trimmingCharacters(in: .whitespacesAndNewlines))|\(draft.startDate?.timeIntervalSince1970 ?? 0)|\(draft.endDate?.timeIntervalSince1970 ?? 0)"
+        guard beginSave(key: saveKey) else { return books.first(where: { $0.name == draft.name })?.id ?? -1 }
+        defer { endSave(key: saveKey) }
         let book = LedgerBook(
             id: nextBookId,
 
@@ -364,6 +373,7 @@ final class LedgerStore: ObservableObject {
       books.insert(book, at: 0)
       refreshDerivedData()
       await persistAndMaybeSync(reason: "新账本已保存")
+      completeSave(key: saveKey)
       return book.id
     }
 
@@ -599,6 +609,9 @@ final class LedgerStore: ObservableObject {
   }
 
   func createBudget(_ draft: BudgetDraft) async {
+    let saveKey = "budget|\(draft.name)|\(draft.limitAmount)|\(draft.categoryId ?? -1)|\(draft.startDate?.timeIntervalSince1970 ?? 0)|\(draft.endDate?.timeIntervalSince1970 ?? 0)"
+    guard beginSave(key: saveKey) else { return }
+    defer { endSave(key: saveKey) }
     budgets.append(
       BudgetItem(
         id: nextBudgetId,
@@ -618,9 +631,13 @@ final class LedgerStore: ObservableObject {
     nextBudgetId += 1
     refreshDerivedData()
     await persistAndMaybeSync(reason: "预算已保存")
+    completeSave(key: saveKey)
   }
 
   func createCategory(_ draft: CategoryDraft) async {
+    let saveKey = "category|\(draft.flowType.rawValue)|\(draft.parentId ?? -1)|\(draft.name.trimmingCharacters(in: .whitespacesAndNewlines))"
+    guard beginSave(key: saveKey) else { return }
+    defer { endSave(key: saveKey) }
     let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else {
       errorMessage = "分类名称不能为空。"
@@ -645,6 +662,7 @@ final class LedgerStore: ObservableObject {
     nextCategoryId += 1
     categories = CategoryTreeBuilder.insert(node, into: categories)
     await persistAndMaybeSync(reason: "分类已保存")
+    completeSave(key: saveKey)
   }
 
   /// Keeps the category ID unchanged, so existing transaction/budget bindings remain valid.
@@ -1324,6 +1342,20 @@ final class LedgerStore: ObservableObject {
         nextBudgetId = snapshot.nextBudgetId
         localUpdatedAt = snapshot.updatedAt
     }
+
+    /// Prevents double taps and concurrent tasks from creating duplicate data.
+    /// A completed key is held briefly, while failed validation paths are free
+    /// to retry immediately because they never call `completeSave`.
+    private func beginSave(key: String) -> Bool {
+        let now = Date()
+        recentlyCompletedSaveKeys = recentlyCompletedSaveKeys.filter { now.timeIntervalSince($0.value) < 2.5 }
+        guard !inFlightSaveKeys.contains(key), recentlyCompletedSaveKeys[key] == nil else { return false }
+        inFlightSaveKeys.insert(key)
+        return true
+    }
+
+    private func endSave(key: String) { inFlightSaveKeys.remove(key) }
+    private func completeSave(key: String) { recentlyCompletedSaveKeys[key] = Date() }
 
     private func persistAndMaybeSync(reason: String) async {
         do {

@@ -545,11 +545,15 @@ private struct CategoryRootPickerSheet: View {
         HStack(spacing: 10) {
             if let icon = item.icon, !icon.isEmpty {
                 Image(systemName: icon)
-                    .frame(width: 18)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color(hex: item.color ?? "#5B8DEF"))
+                    .frame(width: 32, height: 32)
+                    .background(Color(hex: item.color ?? "#5B8DEF").opacity(0.14), in: Circle())
             }
-            Text(item.name)
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name).foregroundStyle(.primary)
+                if !item.children.isEmpty { Text("包含 \(item.children.count) 个子分类").font(.caption2).foregroundStyle(.secondary) }
+            }
             Spacer()
             if selectedCategoryId == item.id {
                 Image(systemName: "checkmark")
@@ -608,11 +612,12 @@ private struct ExpandableCategorySelectionSheet: View {
         HStack(spacing: 10) {
             if let icon = item.icon, !icon.isEmpty {
                 Image(systemName: icon)
-                    .frame(width: 18)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color(hex: item.color ?? "#5B8DEF"))
+                    .frame(width: 32, height: 32)
+                    .background(Color(hex: item.color ?? "#5B8DEF").opacity(0.14), in: Circle())
             }
-            Text(item.name)
-                .foregroundStyle(.primary)
+            Text(item.name).foregroundStyle(.primary)
             Spacer()
             if selectedCategoryId == item.id {
                 Image(systemName: "checkmark")
@@ -664,8 +669,10 @@ private struct ExpandableCategorySelectionRow: View {
         HStack(spacing: 10) {
             if let icon = item.icon, !icon.isEmpty {
                 Image(systemName: icon)
-                    .frame(width: 18)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color(hex: item.color ?? "#5B8DEF"))
+                    .frame(width: 30, height: 30)
+                    .background(Color(hex: item.color ?? "#5B8DEF").opacity(0.14), in: Circle())
             }
             Text(item.name)
                 .foregroundStyle(.primary)

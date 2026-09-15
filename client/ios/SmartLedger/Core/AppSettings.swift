@@ -347,7 +347,10 @@ extension View {
                     from: nil,
                     for: nil
                 )
-            }
+            },
+            // Do not participate in child control/navigation gestures. The
+            // gesture remains available on each page's empty background.
+            including: .gesture
         )
     }
 

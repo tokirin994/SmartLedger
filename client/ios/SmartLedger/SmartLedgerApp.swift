@@ -11,7 +11,6 @@ struct SmartLedgerApp: App {
                 .environmentObject(store)
                 .environmentObject(settings)
                 .preferredColorScheme(settings.preferredColorScheme)
-                .dismissKeyboardWhenTappedOutside()
                 .task {
                     await store.bootstrapIfNeeded()
                 }
@@ -65,6 +64,7 @@ private struct RootTabView: View {
                 }
         }
         .tint(Color.accentColor)
+        .scrollDismissesKeyboard(.interactively)
         .appBackdrop()
         .onChange(of: selection) { oldValue, newValue in
             if isRevertingOCRSelection {
