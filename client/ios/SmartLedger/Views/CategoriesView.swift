@@ -411,6 +411,9 @@ private struct CategoryListRow: View {
             store.errorMessage = nil
             await store.deleteCategory(item.id)
             if let error = store.errorMessage {
+                // 该错误已由分类页的专用弹窗接管；及时消费全局状态，
+                // 否则切换到首页时 Dashboard 会再次展示同一条错误。
+                store.errorMessage = nil
                 onDeletionFailure(error)
             }
         }
