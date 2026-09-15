@@ -6,6 +6,7 @@ struct CategoriesView: View {
     @State private var showCreateSheet = false
     @State private var selectedFlowType: FlowType = .expense
     @State private var searchText = ""
+    @State private var deletionMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -34,7 +35,9 @@ struct CategoriesView: View {
                         .listRowSeparator(.hidden)
                     // OutlineGroup 生成真正的层级列表行：默认折叠，展开后每个子项仍可独立左滑。
                     OutlineGroup(filteredRoots, children: \.outlineChildren) { category in
-                        CategoryListRow(category: category)
+                        CategoryListRow(category: category) { message in
+                            deletionMessage = message
+                        }
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
@@ -58,6 +61,11 @@ struct CategoriesView: View {
             .sheet(isPresented: $showCreateSheet) {
                 CreateCategoryView()
                     .environmentObject(store)
+            }
+            .alert("无法删除分类", isPresented: Binding(get: { deletionMessage != nil }, set: { if !$0 { deletionMessage = nil } })) {
+                Button("知道了", role: .cancel) { deletionMessage = nil }
+            } message: {
+                Text(deletionMessage ?? "")
             }
             .task {
                 if store.categories.isEmpty {
@@ -338,7 +346,7 @@ struct CategoryEditorView: View {
 private struct CategoryListRow: View {
     @EnvironmentObject private var store: LedgerStore
     let category: LedgerCategory
-    @State private var deletionMessage: String?
+    let onDeletionFailure: (String) -> Void
     @State private var showEditSheet = false
 
     var body: some View {
@@ -355,13 +363,6 @@ private struct CategoryListRow: View {
                     Label("删除", systemImage: "trash")
                 }
             }
-        .alert("无法删除分类", isPresented: deletionAlertPresented) {
-            Button("知道了", role: .cancel) {
-                deletionMessage = nil
-            }
-        } message: {
-            Text(deletionMessage ?? "")
-        }
         .contextMenu {
             Button { showEditSheet = true } label: { Label("修改分类", systemImage: "pencil") }
             Button(role: .destructive) { delete(category) } label: { Label("删除分类", systemImage: "trash") }
@@ -405,19 +406,12 @@ private struct CategoryListRow: View {
         category.children.isEmpty ? Color(UIColor.secondarySystemBackground) : categoryColor.opacity(0.12)
     }
 
-    private var deletionAlertPresented: Binding<Bool> {
-        Binding(
-            get: { deletionMessage != nil },
-            set: { if !$0 { deletionMessage = nil } }
-        )
-    }
-
     private func delete(_ item: LedgerCategory) {
         Task {
             store.errorMessage = nil
             await store.deleteCategory(item.id)
             if let error = store.errorMessage {
-                deletionMessage = error
+                onDeletionFailure(error)
             }
         }
     }

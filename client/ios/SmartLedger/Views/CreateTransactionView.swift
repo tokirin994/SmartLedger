@@ -671,10 +671,6 @@ private struct ExpandableCategorySelectionRow: View {
             if selectedCategoryId == item.id {
                 Image(systemName: "checkmark")
                     .foregroundStyle(.blue)
-            } else if showsHierarchy {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
             }
         }
     }
