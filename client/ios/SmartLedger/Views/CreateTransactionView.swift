@@ -632,8 +632,6 @@ private struct ExpandableCategorySelectionRow: View {
     @Binding var selectedCategoryId: Int?
     let onComplete: () -> Void
 
-    @State private var expanded = false
-
     var body: some View {
         if category.children.isEmpty {
             Button {
@@ -644,28 +642,21 @@ private struct ExpandableCategorySelectionRow: View {
             }
             .buttonStyle(.plain)
         } else {
-            DisclosureGroup(isExpanded: $expanded) {
-                VStack(spacing: 6) {
-                    ForEach(category.children) { child in
-                        ExpandableCategorySelectionRow(category: child, selectedCategoryId: $selectedCategoryId, onComplete: onComplete)
-                            .padding(.leading, 12)
-                    }
-                }
-                .padding(.top, 4)
+            NavigationLink {
+                ExpandableCategorySelectionSheet(
+                    rootCategory: category,
+                    selectedCategoryId: $selectedCategoryId,
+                    onCreateCategory: nil,
+                    onComplete: onComplete
+                )
             } label: {
-                Button {
-                    selectedCategoryId = category.id
-                    onComplete()
-                } label: {
-                    row(category)
-                }
-                .buttonStyle(.plain)
+                row(category, showsHierarchy: true)
             }
         }
     }
 
     @ViewBuilder
-    private func row(_ item: LedgerCategory) -> some View {
+    private func row(_ item: LedgerCategory, showsHierarchy: Bool = false) -> some View {
         HStack(spacing: 10) {
             if let icon = item.icon, !icon.isEmpty {
                 Image(systemName: icon)
@@ -680,6 +671,10 @@ private struct ExpandableCategorySelectionRow: View {
             if selectedCategoryId == item.id {
                 Image(systemName: "checkmark")
                     .foregroundStyle(.blue)
+            } else if showsHierarchy {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
         }
     }

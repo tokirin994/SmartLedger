@@ -488,7 +488,6 @@ private struct BookAutoCollectCategoryPicker: View {
     @Environment(\.dismiss) private var dismiss
     let onCommit: (Set<Int>, Bool, Bool) -> Void
     @State private var selectedIDs: Set<Int>
-    @State private var expandedRootIDs: Set<Int> = []
     @State private var flowFilter: AutoCollectFlowFilter = .all
     @State private var showingExecutionConfirmation = false
     @State private var keepExistingCollected = true
@@ -528,12 +527,14 @@ private struct BookAutoCollectCategoryPicker: View {
                     if root.children.isEmpty {
                         rootRow(root)
                     } else {
-                        DisclosureGroup(isExpanded: expandedBinding(for: root.id)) {
-                            ForEach(root.children) { child in
-                                childRow(child, root: root)
-                            }
+                        NavigationLink {
+                            AutoCollectCategoryBranchPicker(
+                                category: root,
+                                selectedIDs: $selectedIDs,
+                                rootID: root.id
+                            )
                         } label: {
-                            rootRow(root)
+                            hierarchyRow(root)
                         }
                     }
                 }
@@ -572,12 +573,6 @@ private struct BookAutoCollectCategoryPicker: View {
         }
     }
 
-    private func expandedBinding(for id: Int) -> Binding<Bool> {
-        Binding(get: { expandedRootIDs.contains(id) }, set: { expanded in
-            if expanded { expandedRootIDs.insert(id) } else { expandedRootIDs.remove(id) }
-        })
-    }
-
     private func rootRow(_ root: LedgerCategory) -> some View {
         Button { toggleRoot(root) } label: {
             HStack(spacing: 10) {
@@ -593,16 +588,17 @@ private struct BookAutoCollectCategoryPicker: View {
         .buttonStyle(.plain)
     }
 
-    private func childRow(_ child: LedgerCategory, root: LedgerCategory) -> some View {
-        Button { toggleChild(child) } label: {
-            HStack(spacing: 10) {
-                Image(systemName: child.icon ?? root.icon ?? "tag").foregroundStyle(Color(hex: child.color ?? root.color ?? "#4F46E5"))
-                Text(child.name).foregroundStyle(.primary)
-                Spacer()
-                if selectedIDs.contains(child.id) { Image(systemName: "checkmark").foregroundStyle(.blue) }
+    private func hierarchyRow(_ category: LedgerCategory) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: category.icon ?? "folder.fill").foregroundStyle(Color(hex: category.color ?? "#4F46E5"))
+                .frame(width: 28, height: 28).background(Color(hex: category.color ?? "#4F46E5").opacity(0.14), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(category.name).foregroundStyle(.primary)
+                Text("包含 \(category.children.count) 个子分类").font(.caption2).foregroundStyle(.secondary)
             }
+            Spacer()
+            if selectedIDs.contains(category.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
         }
-        .buttonStyle(.plain)
     }
 
     private func toggleRoot(_ root: LedgerCategory) {
@@ -613,14 +609,58 @@ private struct BookAutoCollectCategoryPicker: View {
         } else {
             selectedIDs.subtract(root.flattened().map(\.id))
             selectedIDs.insert(root.id)
-            expandedRootIDs.remove(root.id)
         }
     }
 
-    private func toggleChild(_ child: LedgerCategory) {
-        selectedIDs.remove(-1)
-        selectedIDs.remove(-2)
-        if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
+}
+
+/// The same one-level-at-a-time interaction used by the transaction picker.
+/// It avoids expanding a third level into an unreadable single list.
+private struct AutoCollectCategoryBranchPicker: View {
+    let category: LedgerCategory
+    @Binding var selectedIDs: Set<Int>
+    let rootID: Int
+
+    var body: some View {
+        List {
+            Section("当前分类") {
+                Button { toggle(category, includeDescendants: true) } label: { row(category, hierarchy: false) }
+                    .buttonStyle(.plain)
+            }
+            Section("下级分类") {
+                ForEach(category.children) { child in
+                    if child.children.isEmpty {
+                        Button { toggle(child, includeDescendants: false) } label: { row(child, hierarchy: false) }
+                            .buttonStyle(.plain)
+                    } else {
+                        NavigationLink { AutoCollectCategoryBranchPicker(category: child, selectedIDs: $selectedIDs, rootID: rootID) } label: { row(child, hierarchy: true) }
+                    }
+                }
+            }
+        }
+        .navigationTitle(category.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toggle(_ item: LedgerCategory, includeDescendants: Bool) {
+        selectedIDs.remove(-1); selectedIDs.remove(-2)
+        if selectedIDs.contains(item.id) { selectedIDs.remove(item.id) }
+        else {
+            if item.id != rootID { selectedIDs.remove(rootID) }
+            if includeDescendants { selectedIDs.subtract(item.flattened().map(\.id)) }
+            selectedIDs.insert(item.id)
+        }
+    }
+
+    private func row(_ item: LedgerCategory, hierarchy: Bool) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.icon ?? "tag.fill").foregroundStyle(Color(hex: item.color ?? "#4F46E5"))
+                .frame(width: 28, height: 28).background(Color(hex: item.color ?? "#4F46E5").opacity(0.14), in: Circle())
+            Text(item.name).foregroundStyle(.primary)
+            Spacer()
+            if selectedIDs.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
+            else if hierarchy { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+        }
     }
 }
 
