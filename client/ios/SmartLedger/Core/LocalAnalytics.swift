@@ -26,7 +26,7 @@ enum LocalAnalytics {
       let spent = isWithinConfiguredRange ? transactions.filter { tx in
         tx.kind == .expense && tx.happenedAt >= periodStart && tx.happenedAt < periodEnd &&
         matchBudgetCategory(tx: tx, budget: budget, categories: categories)
-      }.reduce(0.0) { $0 + $1.amount } : 0
+      }.reduce(0.0) { $0 + $1.selfShareAmount } : 0
 
       let ratio = budget.limitAmount > 0 ? spent / budget.limitAmount : 0
       return BudgetItem(
@@ -47,8 +47,8 @@ enum LocalAnalytics {
   }
 
   static func makeOverview(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], start: Date, end: Date, granularity: Granularity) -> AnalyticsOverview {
-    let totalIncome = transactions.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.amount }
-    let totalExpense = transactions.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.amount }
+    let totalIncome = transactions.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.selfShareAmount }
+    let totalExpense = transactions.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.selfShareAmount }
     let trend = makeTrend(transactions: transactions, granularity: granularity)
     let distribution = makeDistribution(transactions: transactions, categories: categories)
     return AnalyticsOverview(
@@ -71,8 +71,8 @@ enum LocalAnalytics {
     for tx in filtered {
       let label = granularityLabel(for: tx.happenedAt, granularity: granularity)
       let categoryName = rootCategoryName(for: tx, categories: categories)
-      bucket[categoryName, default: [:]][label, default: 0] += tx.amount
-      totals[categoryName, default: 0] += tx.amount
+      bucket[categoryName, default: [:]][label, default: 0] += tx.selfShareAmount
+      totals[categoryName, default: 0] += tx.selfShareAmount
     }
     let top = totals.sorted { $0.value > $1.value }.prefix(8).map { $0.key }
     let series = top.map { name in
@@ -86,7 +86,7 @@ enum LocalAnalytics {
     for tx in transactions {
       let label = granularityLabel(for: tx.happenedAt, granularity: granularity)
       var current = bucket[label] ?? (0, 0)
-      if tx.kind == .income { current.income += tx.amount } else { current.expense += tx.amount }
+      if tx.kind == .income { current.income += tx.selfShareAmount } else { current.expense += tx.selfShareAmount }
       bucket[label] = current
     }
     return bucket.keys.sorted().map { label in
@@ -103,7 +103,7 @@ enum LocalAnalytics {
       return makeChildDistribution(transactions: expenseTransactions, categories: categories, rootCategoryId: selectedRootCategoryId)
     }
 
-    let totalExpense = expenseTransactions.reduce(0.0) { $0 + $1.amount }
+    let totalExpense = expenseTransactions.reduce(0.0) { $0 + $1.selfShareAmount }
     return makeRootDistribution(transactions: expenseTransactions, categories: categories, totalExpense: totalExpense)
   }
 
@@ -114,7 +114,7 @@ enum LocalAnalytics {
       let name = rootCategoryName(for: tx, categories: categories)
       let color = rootCategoryColor(for: tx, categories: categories)
       let current = bucket[name] ?? (0, color)
-      bucket[name] = (current.amount + tx.amount, color)
+      bucket[name] = (current.amount + tx.selfShareAmount, color)
     }
     return bucket.map { key, value in
       DistributionPoint(category: key, amount: value.amount, ratio: value.amount / totalExpense, color: value.color)
@@ -146,7 +146,7 @@ enum LocalAnalytics {
       let childColor = rootCategory.color
 
       let current = bucket[childName] ?? (0, childColor)
-      bucket[childName] = (current.amount + tx.amount, childColor)
+      bucket[childName] = (current.amount + tx.selfShareAmount, childColor)
     }
 
     let totalExpense = bucket.values.reduce(0.0) { $0 + $1.amount }

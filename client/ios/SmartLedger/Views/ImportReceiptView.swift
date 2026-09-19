@@ -196,6 +196,7 @@ private func singleImportSection(parsed: OCRImportResult) -> some View {
                 }
             }
         }
+        .textSelection(.enabled)
     }
 
     SectionCard(title: "确认入账") {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BooksView: View {
     @EnvironmentObject private var store: LedgerStore
@@ -135,6 +136,8 @@ private struct BookDetailView: View {
     let book: LedgerBook
     @State private var showingEditor = false
     @State private var deleteRequested = false
+    @State private var editingTransaction: LedgerTransaction?
+    @State private var exportFormat: BookExportFormat?
 
     private var relatedTransactions: [LedgerTransaction] { store.transactions.filter { $0.bookIds.contains(book.id) || $0.bookId == book.id }.sorted { $0.happenedAt > $1.happenedAt } }
     private var current: LedgerBook { store.books.first(where: { $0.id == book.id }) ?? book }
@@ -147,6 +150,10 @@ private struct BookDetailView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(current.note?.isEmpty == false ? current.note! : "将相关流水归集在一起").foregroundStyle(.secondary)
                     HStack(spacing: 10) { metric("支出", current.expenseAmount.cnyText, .orange); metric("收入", current.incomeAmount.cnyText, .green); metric("净额", current.balance.cnyText, current.balance < 0 ? .red : .blue) }
+                    HStack(spacing: 10) {
+                        metric("优惠", relatedTransactions.compactMap(\.discountAmount).reduce(0, +).cnyText, .green)
+                        metric("溢价", relatedTransactions.compactMap(\.premiumAmount).reduce(0, +).cnyText, .red)
+                    }
                     if !current.participantNames.isEmpty { Text("分账成员").font(.caption).foregroundStyle(.secondary); ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(current.participantNames, id: \.self) { Text($0).padding(.horizontal, 11).padding(.vertical, 6).background(.blue.opacity(0.1), in: Capsule()) } } } }
                 }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15)
                 if current.budgetEnabled { budgetCard }
@@ -156,8 +163,13 @@ private struct BookDetailView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle(current.name).navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Menu { Button("设置") { showingEditor = true }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "gearshape") } } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Menu { Button("设置") { showingEditor = true }; Button("导出 Markdown") { exportFormat = .markdown }; Button("导出 HTML") { exportFormat = .html }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "gearshape") } } }
         .sheet(isPresented: $showingEditor) { BookEditorView(book: current).environmentObject(store) }
+        .sheet(item: $editingTransaction) { transaction in
+            CreateTransactionView(editingTransaction: transaction)
+                .environmentObject(store)
+        }
+        .fileExporter(isPresented: Binding(get: { exportFormat != nil }, set: { if !$0 { exportFormat = nil } }), document: BookExportDocument(book: current, transactions: relatedTransactions, format: exportFormat ?? .markdown), contentType: exportFormat?.contentType ?? .plainText, defaultFilename: "\(current.name).\(exportFormat?.fileExtension ?? "md")") { _ in exportFormat = nil }
         .alert("删除账本？", isPresented: $deleteRequested) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { Task { await store.deleteBook(current.id) }; dismiss() } } message: { Text("删除账本不会删除流水，只会移除关联。") }
     }
 
@@ -177,6 +189,8 @@ private struct BookDetailView: View {
             ForEach(relatedTransactions) { transaction in
                 BookTransactionSwipeRow(transaction: transaction) {
                     Task { await store.removeTransaction(transaction.id, from: current.id) }
+                } onEdit: {
+                    editingTransaction = transaction
                 }
             }
         }
@@ -188,6 +202,7 @@ private struct BookDetailView: View {
 private struct BookTransactionSwipeRow: View {
     let transaction: LedgerTransaction
     let onRemove: () -> Void
+    let onEdit: () -> Void
     @State private var isActionRevealed = false
     @GestureState private var dragOffset: CGFloat = 0
 
@@ -235,6 +250,10 @@ private struct BookTransactionSwipeRow: View {
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
             .offset(x: contentOffset)
+            .onTapGesture {
+                guard !isActionRevealed else { return }
+                onEdit()
+            }
             .gesture(
                 DragGesture(minimumDistance: 12)
                     .updating($dragOffset) { value, state, _ in state = value.translation.width }
@@ -248,6 +267,41 @@ private struct BookTransactionSwipeRow: View {
         }
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private enum BookExportFormat: Equatable {
+    case markdown, html
+    var contentType: UTType { self == .markdown ? .plainText : .html }
+    var fileExtension: String { self == .markdown ? "md" : "html" }
+}
+
+private struct BookExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText, .html] }
+    let text: String
+
+    init(book: LedgerBook, transactions: [LedgerTransaction], format: BookExportFormat) {
+        let discount = transactions.compactMap(\.discountAmount).reduce(0, +)
+        let premium = transactions.compactMap(\.premiumAmount).reduce(0, +)
+        let period = book.startDate?.formatted(date: .abbreviated, time: .omitted) ?? "未限定"
+        let rows = transactions.map { transaction in
+            let sign = transaction.kind == .expense ? "-" : "+"
+            let category = transaction.categoryName ?? "未分类"
+            let date = transaction.happenedAt.formatted(date: .abbreviated, time: .shortened)
+            return "| \(date) | \(transaction.title) | \(category) | \(sign)\(transaction.amount.cnyText) | \(transaction.note ?? "") |"
+        }.joined(separator: "\n")
+        let markdown = "# \(book.name)\n\n> 账本期间：\(period)\n\n## 汇总\n\n- 支出：\(book.expenseAmount.cnyText)\n- 收入：\(book.incomeAmount.cnyText)\n- 净额：\(book.balance.cnyText)\n- 优惠：\(discount.cnyText)\n- 溢价：\(premium.cnyText)\n\n## 流水\n\n| 时间 | 标题 | 分类 | 金额 | 备注 |\n|---|---|---|---:|---|\n\(rows)\n"
+        if format == .markdown {
+            self.text = markdown
+        } else {
+            let escaped = markdown.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+            self.text = "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>\(book.name)</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:40px auto;padding:0 24px;color:#202124}table{border-collapse:collapse;width:100%}th,td{padding:10px;border-bottom:1px solid #ddd;text-align:left}h1{color:#2563eb}</style><body><pre style=\"white-space:pre-wrap;font:inherit\">\(escaped)</pre></body></html>"
+        }
+    }
+
+    init(configuration: ReadConfiguration) throws { text = "" }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 

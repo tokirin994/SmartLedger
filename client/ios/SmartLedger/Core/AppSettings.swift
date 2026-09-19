@@ -350,7 +350,10 @@ extension View {
             },
             // Do not participate in child control/navigation gestures. The
             // gesture remains available on each page's empty background.
-            including: .gesture
+            // Include taps delivered by descendants so this also works in
+            // Form/List controls and sheets, while simultaneousGesture keeps
+            // the descendant action (navigation, buttons, pickers) intact.
+            including: .subviews
         )
     }
 

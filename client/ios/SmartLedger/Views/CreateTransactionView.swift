@@ -13,6 +13,7 @@ struct CreateTransactionView: View {
     @State private var showCategoryPicker = false
     @State private var showUnsavedChangesDialog = false
     @State private var saveFailureMessage: String?
+    @State private var showOffsetOverLimitConfirmation = false
 
     init(editingTransaction: LedgerTransaction? = nil) {
         self.editingTransaction = editingTransaction
@@ -90,9 +91,7 @@ struct CreateTransactionView: View {
                             HStack {
                                 Text("账本归属")
                                 Spacer()
-                                Text(selectedBookNamesText)
-                                    .foregroundStyle(selectedBooks.isEmpty ? .secondary : .primary)
-                                    .multilineTextAlignment(.trailing)
+                                TransactionBooksSummaryRow(names: selectedBooks.map(\.name))
                             }
                         }
                     }
@@ -133,15 +132,16 @@ struct CreateTransactionView: View {
 
                     if let selectedBook, selectedBookSupportsSplit {
                         Section("多人分账 - \(selectedBook.name)") {
-                            Picker("付款人", selection: Binding(
+                                Picker("付款人", selection: Binding(
                                 get: { draft.paidByParticipantId },
                                 set: { draft.paidByParticipantId = $0 }
-                            )) {
-                                Text("请选择付款人").tag(String?.none)
-                                ForEach(splitParticipants) { participant in
-                                    Text(participant.name).tag(Optional(participant.id))
+                                )) {
+                                    Text("请选择付款人").tag(String?.none)
+                                    ForEach(splitParticipants) { participant in
+                                        let participantId = participant.id
+                                        Text(participant.name).tag(Optional(participantId))
+                                    }
                                 }
-                            }
 
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("参与分账成员")
@@ -152,18 +152,7 @@ struct CreateTransactionView: View {
                                         participant.name,
                                         isOn: Binding(
                                             get: { draft.splitParticipantIds.contains(participant.id) },
-                                            set: { enabled in
-                                                let participantId = participant.id
-                                                if enabled {
-                                                    if !draft.splitParticipantIds.contains(participantId) {
-                                                        draft.splitParticipantIds.append(participantId)
-                                                    }
-                                                } else {
-                                                    draft.splitParticipantIds.removeAll(where: { id in
-                                                        id == participantId
-                                                    })
-                                                }
-                                            }
+                        set: { setParticipant(participant.id, enabled: $0) }
                                         )
                                     )
                                 }
@@ -180,34 +169,13 @@ struct CreateTransactionView: View {
                     }
 
                     if draft.kind == .expense {
-                        Section("抵扣 / 报销") {
-                            if !draft.offsetEnabled {
-                                Button {
-                                    draft.offsetEnabled = true
-                                    draft.offsetCategoryId = preferredOffsetCategoryID
-                                } label: {
-                                    Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
-                                }
-                            } else {
-                                Picker("收入分类", selection: $draft.offsetCategoryId) {
-                                    Text("请选择收入分类").tag(Int?.none)
-                                    ForEach(store.flattenedCategories.filter { $0.flowType == .income }) { category in
-                                        Text(category.displayName).tag(Int?.some(category.id))
-                                    }
-                                }
-                                HStack {
-                                    Text("抵扣比例")
-                                    Slider(value: $draft.offsetRatio, in: 0...100, step: 1)
-                                    Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 44, alignment: .trailing)
-                                }
-                                LabeledContent("预计生成收入", value: offsetGeneratedAmount.cnyText)
-                                    .font(.subheadline.weight(.semibold))
-                                Button("移除抵扣", role: .destructive) {
-                                    draft.offsetEnabled = false
-                                    draft.offsetCategoryId = nil
-                                }
-                            }
-                        }
+                        OffsetDraftSection(
+                            offsets: $draft.offsets,
+                            amount: transactionAmount,
+                            happenedAt: draft.happenedAt,
+                            preferredCategoryID: preferredOffsetCategoryID,
+                            categories: offsetIncomeCategories
+                        )
                     }
 
                     Section("高级字段") {
@@ -327,6 +295,13 @@ struct CreateTransactionView: View {
     } message: {
         Text(saveFailureMessage ?? "请检查填写内容后重试。")
     }
+    .confirmationDialog("抵扣比例超过 100%", isPresented: $showOffsetOverLimitConfirmation, titleVisibility: .visible) {
+        Button("仍按原比例创建") { Task { await performSaveDraft(normalizeOffsets: false) } }
+        Button("调整合计为 100%") { Task { await performSaveDraft(normalizeOffsets: true) } }
+        Button("继续编辑", role: .cancel) {}
+    } message: {
+        Text("当前共 \(Int(totalOffsetRatio))%，预计生成 \(totalOffsetAmount.cnyText) 的收入。可以保留原比例，或按比例压缩至合计 100%。")
+    }
 }
 }
 private var selectedBookNamesText: String {
@@ -341,8 +316,18 @@ private var preferredOffsetCategoryID: Int? {
         ?? income.first?.id
 }
 
-private var offsetGeneratedAmount: Double {
-    ((Double(draft.amount) ?? 0) * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
+private var transactionAmount: Double {
+    Double(draft.amount) ?? 0
+}
+
+private func offsetGeneratedAmount(for offset: OffsetDraft) -> Double {
+    ((Double(draft.amount) ?? 0) * max(offset.ratio, 0) / 100 * 100).rounded() / 100
+}
+
+private var totalOffsetRatio: Double { draft.offsets.reduce(0) { $0 + max($1.ratio, 0) } }
+private var totalOffsetAmount: Double { draft.offsets.reduce(0) { $0 + offsetGeneratedAmount(for: $1) } }
+private var offsetIncomeCategories: [LedgerCategory] {
+    store.flattenedCategories.filter { $0.flowType == .income }
 }
 
 private var selectedCategoryDisplayName: String {
@@ -352,6 +337,16 @@ private var selectedCategoryDisplayName: String {
         return "请选择"
     }
     return category.name
+}
+
+private func setParticipant(_ id: String, enabled: Bool) {
+    if enabled {
+        if !draft.splitParticipantIds.contains(id) {
+            draft.splitParticipantIds.append(id)
+        }
+    } else {
+        draft.splitParticipantIds.removeAll { $0 == id }
+    }
 }
 
 private func applyRecommendedBooksBeforeSave() {
@@ -392,9 +387,21 @@ private func saveDraftAndDismiss() async {
         saveFailureMessage = "金额必须是大于 0 的数字。"
         return
     }
-    if draft.offsetEnabled && draft.offsetCategoryId == nil {
+    if draft.offsets.contains(where: { $0.categoryId == nil }) {
         saveFailureMessage = "请为抵扣流水选择“报销”或“退款”收入分类。"
         return
+    }
+    if totalOffsetRatio > 100 {
+        showOffsetOverLimitConfirmation = true
+        return
+    }
+    await performSaveDraft(normalizeOffsets: false)
+}
+
+private func performSaveDraft(normalizeOffsets: Bool) async {
+    if normalizeOffsets, totalOffsetRatio > 0 {
+        let scale = 100 / totalOffsetRatio
+        for index in draft.offsets.indices { draft.offsets[index].ratio *= scale }
     }
     if selectedBookSupportsSplit && draft.paidByParticipantId == nil {
         saveFailureMessage = "该账本启用了分账，请选择付款人。"
@@ -406,7 +413,7 @@ private func saveDraftAndDismiss() async {
     }
 
     store.errorMessage = nil
-    draft.title = title
+    draft.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
     if !draft.paymentMethod.isEmpty {
         draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
     }
@@ -415,6 +422,9 @@ private func saveDraftAndDismiss() async {
 
     if let editingTransaction {
         await store.updateTransaction(editingTransaction.id, with: draft)
+        if store.errorMessage == nil && !draft.offsets.isEmpty {
+            await store.createOffsets(for: editingTransaction.id, offsets: draft.offsets)
+        }
     } else {
         await store.createTransaction(draft)
     }
@@ -425,6 +435,85 @@ private func saveDraftAndDismiss() async {
         dismiss()
     }
 }
+}
+
+private struct TransactionBooksSummaryRow: View {
+    let names: [String]
+    var body: some View {
+        Text(names.isEmpty ? "不归属于主题账本" : names.joined(separator: "、"))
+            .foregroundStyle(names.isEmpty ? .secondary : .primary)
+            .multilineTextAlignment(.trailing)
+    }
+}
+
+private struct OffsetIncomeCategoryPicker: View {
+    @Binding var categoryId: Int?
+    let categories: [LedgerCategory]
+
+    var body: some View {
+        Picker("收入分类", selection: $categoryId) {
+            Text("请选择收入分类").tag(Int?.none)
+            ForEach(categories, id: \.id) { category in
+                OffsetIncomeCategoryPickerItem(category: category)
+            }
+        }
+    }
+}
+
+private struct OffsetIncomeCategoryPickerItem: View {
+    let category: LedgerCategory
+
+    var body: some View {
+        let categoryId: Int? = category.id
+        Text(category.displayName).tag(categoryId)
+    }
+}
+
+private struct OffsetDraftSection: View {
+    @Binding var offsets: [OffsetDraft]
+    let amount: Double
+    let happenedAt: Date
+    let preferredCategoryID: Int?
+    let categories: [LedgerCategory]
+
+    private var totalRatio: Double {
+        offsets.reduce(0) { $0 + $1.ratio }
+    }
+
+    private var totalAmount: Double {
+        offsets.reduce(0) { $0 + amount * $1.ratio / 100 }
+    }
+
+    var body: some View {
+        Section("抵扣 / 报销") {
+            ForEach($offsets) { $offset in
+                OffsetIncomeCategoryPicker(categoryId: $offset.categoryId, categories: categories)
+                DatePicker("抵扣时间", selection: $offset.happenedAt)
+                HStack {
+                    Text("抵扣比例")
+                    Slider(value: $offset.ratio, in: 0...200, step: 1)
+                    let percentage = Int(offset.ratio.rounded())
+                    Text("\(percentage)%")
+                        .monospacedDigit()
+                        .frame(width: 48, alignment: .trailing)
+                }
+                LabeledContent("本笔预计收入", value: (amount * offset.ratio / 100).cnyText)
+                    .font(.subheadline.weight(.semibold))
+                Button("移除本笔抵扣", role: .destructive) {
+                    offsets.removeAll { $0.id == offset.id }
+                }
+            }
+            if !offsets.isEmpty {
+                LabeledContent("抵扣合计", value: "\(Int(totalRatio))% · \(totalAmount.cnyText)")
+                    .font(.subheadline.weight(.semibold))
+            }
+            Button {
+                offsets.append(OffsetDraft(categoryId: preferredCategoryID, ratio: 100, happenedAt: happenedAt))
+            } label: {
+                Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
+            }
+        }
+    }
 }
 
 private struct TransactionEditorStateSnapshot: Equatable {
@@ -445,6 +534,7 @@ private struct TransactionEditorStateSnapshot: Equatable {
     let installmentStartMonth: Date
     let paidByParticipantId: String?
     let splitParticipantIds: [String]
+    let offsets: [OffsetDraft]
 
     init(draft: TransactionDraft) {
         self.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -464,6 +554,7 @@ private struct TransactionEditorStateSnapshot: Equatable {
         self.installmentStartMonth = draft.installmentStartMonth
         self.paidByParticipantId = draft.paidByParticipantId
         self.splitParticipantIds = draft.splitParticipantIds.sorted()
+        self.offsets = draft.offsets
     }
 }
 

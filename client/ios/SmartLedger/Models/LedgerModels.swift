@@ -237,6 +237,9 @@ struct LedgerTransaction: Codable, Identifiable, Hashable, Sendable {
     var discountAmount: Double? = nil
     var premiumAmount: Double? = nil
     var installmentStartMonth: Date? = nil
+    /// Points to the expense record that generated this reimbursement/refund.
+    /// It keeps the two records independently editable while preserving their link.
+    var offsetSourceTransactionId: Int? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, title, amount, kind, note, merchant, source, currency
@@ -260,6 +263,18 @@ struct LedgerTransaction: Codable, Identifiable, Hashable, Sendable {
         case discountAmount = "discount_amount"
         case premiumAmount = "premium_amount"
         case installmentStartMonth = "installment_start_month"
+        case offsetSourceTransactionId = "offset_source_transaction_id"
+    }
+}
+
+extension LedgerTransaction {
+    /// Display keeps the original amount. Financial aggregates count only the
+    /// local member's equal share for a split transaction.
+    var selfShareAmount: Double {
+        guard !splitParticipantIds.isEmpty else { return amount }
+        let participates = splitParticipantIds.contains("我") || splitParticipantNames.contains("我")
+        guard participates else { return 0 }
+        return amount / Double(splitParticipantIds.count)
     }
 }
 
@@ -590,6 +605,9 @@ struct TransactionDraft {
     var offsetEnabled: Bool = false
     var offsetCategoryId: Int?
     var offsetRatio: Double = 100
+    /// Newly requested reimbursements/refunds. Existing linked records remain
+    /// independent transactions and are never silently overwritten.
+    var offsets: [OffsetDraft] = []
 
     init() {}
 
@@ -665,6 +683,13 @@ struct TransactionDraft {
             splitParticipantIds: splitParticipantIds
         )
     }
+}
+
+struct OffsetDraft: Identifiable, Equatable {
+    var id = UUID()
+    var categoryId: Int?
+    var ratio: Double = 100
+    var happenedAt: Date = .now
 }
 
 struct CreateTransactionRequest: Encodable, Sendable {

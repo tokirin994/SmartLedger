@@ -247,25 +247,36 @@ final class LedgerStore: ObservableObject {
             )
         }
 
-        // An offset is an independent income row, never a recursive draft.
-        if draft.offsetEnabled, draft.kind == .expense,
-           let offsetCategoryId = draft.offsetCategoryId,
-           let offsetCategory = flattenedCategories.first(where: { $0.id == offsetCategoryId && $0.flowType == .income }) {
-            let offsetAmount = (amount * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
-            if offsetAmount > 0 {
-                created.append(LedgerTransaction(
-                    id: nextTransactionId + created.count, title: draft.title, amount: offsetAmount, kind: .income,
-                    happenedAt: draft.happenedAt, note: draft.note.isEmpty ? "抵扣流水" : draft.note,
-                    merchant: draft.merchant.isEmpty ? nil : draft.merchant,
-                    paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod, source: draft.source, currency: "CNY",
-                    categoryId: offsetCategory.id, categoryName: resolvedCategoryName(for: offsetCategory.id),
-                    bookId: resolvedBook?.id, bookName: bookName, bookIds: resolvedBooks.map(\.id), bookNames: resolvedBooks.map(\.name),
-                    installmentGroupId: nil, installmentIndex: nil, installmentMonths: nil, installmentOriginalTotal: nil,
-                    originalAmount: nil, discountAmount: nil, premiumAmount: nil,
-                    paidByParticipantId: resolvedPayer?.id, paidByParticipantName: resolvedPayer?.name,
-                    splitParticipantIds: resolvedSplitParticipants.map(\.id), splitParticipantNames: resolvedSplitParticipants.map(\.name)
-                ))
-            }
+        // Offsets are independent income records. A legacy single offset is
+        // converted to one entry so OCR/import drafts remain backward compatible.
+        let requestedOffsets: [OffsetDraft]
+        if !draft.offsets.isEmpty {
+            requestedOffsets = draft.offsets
+        } else if draft.offsetEnabled, let categoryId = draft.offsetCategoryId {
+            requestedOffsets = [OffsetDraft(categoryId: categoryId, ratio: draft.offsetRatio, happenedAt: draft.happenedAt)]
+        } else {
+            requestedOffsets = []
+        }
+        let sourceTransactionId = created.first?.id
+        for offset in requestedOffsets where draft.kind == .expense {
+            guard let offsetCategoryId = offset.categoryId,
+                  let offsetCategory = flattenedCategories.first(where: { $0.id == offsetCategoryId && $0.flowType == .income }) else { continue }
+            let offsetAmount = (amount * max(offset.ratio, 0) / 100 * 100).rounded() / 100
+            guard offsetAmount > 0 else { continue }
+            created.append(LedgerTransaction(
+                id: nextTransactionId + created.count, title: draft.title, amount: offsetAmount, kind: .income,
+                happenedAt: offset.happenedAt, note: draft.note.isEmpty ? "抵扣流水" : draft.note,
+                merchant: draft.merchant.isEmpty ? nil : draft.merchant,
+                paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod, source: draft.source, currency: "CNY",
+                categoryId: offsetCategory.id, categoryName: resolvedCategoryName(for: offsetCategory.id),
+                bookId: resolvedBook?.id, bookName: bookName, bookIds: resolvedBooks.map(\.id), bookNames: resolvedBooks.map(\.name),
+                installmentGroupId: nil, installmentIndex: nil, installmentMonths: nil,
+                paidByParticipantId: resolvedPayer?.id, paidByParticipantName: resolvedPayer?.name,
+                splitParticipantIds: resolvedSplitParticipants.map(\.id), splitParticipantNames: resolvedSplitParticipants.map(\.name),
+                installmentOriginalTotal: nil, originalAmount: nil, discountAmount: nil, premiumAmount: nil,
+                installmentStartMonth: nil,
+                offsetSourceTransactionId: sourceTransactionId
+            ))
         }
         nextTransactionId += created.count
         transactions = (created + transactions).sorted { $0.happenedAt > $1.happenedAt }
@@ -339,6 +350,65 @@ final class LedgerStore: ObservableObject {
         transactions.sort { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
         await persistAndMaybeSync(reason: "流水已更新")
+    }
+
+    /// Adds reimbursement/refund records to an existing expense without
+    /// mutating its amount or creating a duplicate source transaction.
+    func createOffsets(for transactionId: Int, offsets: [OffsetDraft]) async {
+        guard let source = transactions.first(where: { $0.id == transactionId }), source.kind == .expense else {
+            errorMessage = "未找到可抵扣的支出流水"
+            return
+        }
+        let validOffsets = offsets.filter { ($0.categoryId != nil) && $0.ratio > 0 }
+        guard !validOffsets.isEmpty else { return }
+        let saveKey = "offset|\(transactionId)|\(validOffsets.map { "\($0.categoryId ?? -1)-\($0.ratio)-\($0.happenedAt.timeIntervalSince1970.rounded())" }.joined(separator: "|"))"
+        guard beginSave(key: saveKey) else { return }
+        defer { endSave(key: saveKey) }
+
+        var generated: [LedgerTransaction] = []
+        for offset in validOffsets {
+            guard let categoryId = offset.categoryId,
+                  let category = flattenedCategories.first(where: { $0.id == categoryId && $0.flowType == .income }) else { continue }
+            let amount = (source.amount * offset.ratio / 100 * 100).rounded() / 100
+            guard amount > 0 else { continue }
+            generated.append(LedgerTransaction(
+                id: nextTransactionId + generated.count,
+                title: source.title,
+                amount: amount,
+                kind: .income,
+                happenedAt: offset.happenedAt,
+                note: source.note?.isEmpty == false ? source.note : "抵扣流水",
+                merchant: source.merchant,
+                paymentMethod: source.paymentMethod,
+                source: source.source,
+                currency: source.currency,
+                categoryId: category.id,
+                categoryName: resolvedCategoryName(for: category.id),
+                bookId: source.bookId,
+                bookName: source.bookName,
+                bookIds: source.bookIds,
+                bookNames: source.bookNames,
+                installmentGroupId: nil,
+                installmentIndex: nil,
+                installmentMonths: nil,
+                paidByParticipantId: source.paidByParticipantId,
+                paidByParticipantName: source.paidByParticipantName,
+                splitParticipantIds: source.splitParticipantIds,
+                splitParticipantNames: source.splitParticipantNames,
+                installmentOriginalTotal: nil,
+                originalAmount: nil,
+                discountAmount: nil,
+                premiumAmount: nil,
+                installmentStartMonth: nil,
+                offsetSourceTransactionId: source.id
+            ))
+        }
+        guard !generated.isEmpty else { return }
+        nextTransactionId += generated.count
+        transactions = (generated + transactions).sorted { $0.happenedAt > $1.happenedAt }
+        refreshDerivedData()
+        await persistAndMaybeSync(reason: "抵扣流水已保存")
+        completeSave(key: saveKey)
     }
 
     @discardableResult
@@ -853,8 +923,8 @@ final class LedgerStore: ObservableObject {
         let filtered = transactions.filter { interval.contains($0.happenedAt) }
         let grouped = Dictionary(grouping: filtered) { calendar.startOfDay(for: $0.happenedAt) }
         return grouped.mapValues { items in
-            let income = items.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.amount }
-            let expense = items.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.amount }
+            let income = items.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.selfShareAmount }
+            let expense = items.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.selfShareAmount }
             return DailyFinanceSummary(income: income, expense: expense)
         }
     }
@@ -1158,8 +1228,8 @@ final class LedgerStore: ObservableObject {
     private func recomputeBookSummaries(from books: [LedgerBook], transactions: [LedgerTransaction]) -> [LedgerBook] {
         books.map { book in
             let scoped = transactions.filter { $0.bookIds.contains(book.id) || $0.bookId == book.id }
-            let income = scoped.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.amount }
-            let expense = scoped.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.amount }
+            let income = scoped.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.selfShareAmount }
+            let expense = scoped.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.selfShareAmount }
             return LedgerBook(
                 id: book.id,
                 name: book.name,

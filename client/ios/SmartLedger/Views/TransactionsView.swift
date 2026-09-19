@@ -199,6 +199,10 @@ struct TransactionsView: View {
  				}
  			}
  			.padding(.vertical, 6)
+			HStack(spacing: 12) {
+				compactStat(title: "优惠", value: filteredTransactions.compactMap(\.discountAmount).reduce(0, +).cnyText, tint: .green)
+				compactStat(title: "溢价", value: filteredTransactions.compactMap(\.premiumAmount).reduce(0, +).cnyText, tint: .red)
+			}
 		}
  		.listRowBackground(Color.clear)
  	}
@@ -476,7 +480,7 @@ struct TransactionsView: View {
  		return grouped
  			.map { day, items in
  				let partial = items.reduce(0.0) { partial, tx in
- 					partial + (tx.kind == .income ? tx.amount : -tx.amount)
+					partial + (tx.kind == .income ? tx.selfShareAmount : -tx.selfShareAmount)
  				}
  				return TransactionDayGroup(dateKey: day, title: day.formatted(date: .abbreviated, time: .omitted), total: partial, items: items.sorted { $0.happenedAt > $1.happenedAt })
  			}
@@ -484,11 +488,11 @@ struct TransactionsView: View {
  	}
  
  	private var totalIncome: Double {
- 		filteredTransactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount }
+		filteredTransactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.selfShareAmount }
  	}
  
  	private var totalExpense: Double {
- 		filteredTransactions.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount }
+		filteredTransactions.filter { $0.kind == .expense }.reduce(0) { $0 + $1.selfShareAmount }
  	}
  
  	private var netAmount: Double {

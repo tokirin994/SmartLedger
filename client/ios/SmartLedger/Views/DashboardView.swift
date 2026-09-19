@@ -177,6 +177,20 @@ private var summaryGrid: some View {
                 color: .purple,
                 systemImage: "gauge.with.needle.fill"
             )
+        MetricCard(
+            title: "优惠",
+            value: currentWindowTransactions.compactMap(\.discountAmount).reduce(0, +).cnyText,
+            subtitle: "统计范围内优惠合计",
+            color: .green,
+            systemImage: "tag.fill"
+        )
+        MetricCard(
+            title: "溢价",
+            value: currentWindowTransactions.compactMap(\.premiumAmount).reduce(0, +).cnyText,
+            subtitle: "统计范围内溢价合计",
+            color: .red,
+            systemImage: "arrow.up.forward"
+        )
         }
     }
 
