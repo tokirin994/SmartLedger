@@ -8,7 +8,8 @@ struct TransactionsView: View {
     @State private var quickAssignTransaction: LedgerTransaction?
     @State private var quickBookTransaction: LedgerTransaction?
    @State private var pendingDeleteTransaction: LedgerTransaction?
-    @State private var selectedFlow: FlowFilter = .all
+     @State private var selectedFlow: FlowFilter = .all
+     @State private var searchText = ""
     @State private var selectedDateScope: TransactionDateScope = .recent30Days
     @State private var selectedCategoryId: Int?
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
@@ -70,9 +71,10 @@ struct TransactionsView: View {
                     ToolbarItem(placement: .topBarTrailing) { Button { Task { await reloadTransactions() } } label: { Image(systemName: "arrow.clockwise") } }
                     ToolbarItem(placement: .topBarTrailing) { Button { showCreateSheet = true } label: { Image(systemName: "plus") } }
                 }
-                .safeAreaInset(edge: .top) {
-                    VStack(spacing: 10) {
-                        filterBar
+                 .safeAreaInset(edge: .top) {
+                     VStack(spacing: 10) {
+                         searchBar
+                         filterBar
                         categoryFilterBar
                         customDateFilterBar
                     }
@@ -143,6 +145,30 @@ struct TransactionsView: View {
         .glassCard(cornerRadius: 18, strokeOpacity: 0.18)
     }
 
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("搜索标题、商户、备注或分类", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 44)
+        .background(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
+    }
+
     private var categoryFilterBar: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -164,9 +190,9 @@ struct TransactionsView: View {
                 } label: { filterChip(title: selectedCategoryTitle, systemImage: "line.3.horizontal.decrease.circle") }
 
                 Spacer(minLength: 0)
-                if selectedCategoryId != nil || selectedDateScope != .recent30Days {
+                if selectedCategoryId != nil || selectedDateScope != .recent30Days || !searchText.isEmpty {
                     Button("重置") {
-                        selectedCategoryId = nil; selectedDateScope = .recent30Days
+                        selectedCategoryId = nil; selectedDateScope = .recent30Days; searchText = ""
                         let dates = TransactionDateScope.recent30Days.defaultDates; startDate = dates.start; endDate = dates.end
                     }.font(.caption.weight(.semibold))
                 }
@@ -381,21 +407,39 @@ struct TransactionsView: View {
  		let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: endDate)) ?? endDate
  		var result = store.transactions.filter { $0.happenedAt >= start && $0.happenedAt < end }
  
- 		if let selectedCategoryId {
- 			result = result.filter { transaction in
- 				guard let categoryId = transaction.categoryId else { return false }
- 				return categoryMatchesFilter(transactionCategoryId: categoryId, selectedCategoryId: selectedCategoryId)
- 			}
- 		}
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            result = result.filter { matchesSearch($0, query: query) }
+        }
+
+        if let selectedCategoryId {
+            result = result.filter { transaction in
+                guard let categoryId = transaction.categoryId else { return false }
+                return categoryMatchesFilter(transactionCategoryId: categoryId, selectedCategoryId: selectedCategoryId)
+            }
+        }
  		switch selectedFlow {
  		case .all:
  			return result
  		case .expense:
  			return result.filter { $0.kind == .expense }
- 		case .income:
- 			return result.filter { $0.kind == .income }
- 		}
- 	}
+		case .income:
+			return result.filter { $0.kind == .income }
+		}
+	}
+
+    private func matchesSearch(_ transaction: LedgerTransaction, query: String) -> Bool {
+        let searchable = [
+            transaction.title,
+            transaction.merchant ?? "",
+            transaction.note ?? "",
+            transaction.categoryName ?? "",
+            transaction.bookName ?? "",
+            transaction.bookNames.joined(separator: " "),
+            transaction.paymentMethod ?? ""
+        ].joined(separator: " ")
+        return searchable.localizedCaseInsensitiveContains(query)
+    }
  
  	private var categoryFilterOptions: [LedgerCategory] {
  		let flowScoped = store.flattenedCategories.filter { category in
