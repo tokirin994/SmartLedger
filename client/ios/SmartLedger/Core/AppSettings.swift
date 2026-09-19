@@ -339,7 +339,8 @@ extension View {
     /// `simultaneousGesture` deliberately preserves buttons, navigation links,
     /// pickers and scrolling behaviour.
     func dismissKeyboardWhenTappedOutside() -> some View {
-        simultaneousGesture(
+        contentShape(Rectangle())
+        .simultaneousGesture(
             TapGesture().onEnded {
                 UIApplication.shared.sendAction(
                     #selector(UIResponder.resignFirstResponder),
@@ -366,6 +367,7 @@ extension View {
         // Navigation stacks use this shared backdrop. Keep it passive so it
         // can never compete with NavigationLink hit testing.
         background(AppBackdrop())
+            .dismissKeyboardWhenTappedOutside()
     }
 
     func glassCard(cornerRadius: CGFloat = 22, strokeOpacity: Double = 0.26) -> some View {

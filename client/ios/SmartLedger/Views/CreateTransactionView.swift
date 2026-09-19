@@ -45,6 +45,20 @@ struct CreateTransactionView: View {
         selectedBook?.splitEnabled == true
     }
 
+    private var existingOffsetTransactions: [LedgerTransaction] {
+        guard let sourceId = editingTransaction?.id else { return [] }
+        return store.transactions.filter { $0.offsetSourceTransactionId == sourceId && $0.kind == .income }
+    }
+
+    private var existingOffsetAmount: Double {
+        existingOffsetTransactions.reduce(0) { $0 + $1.amount }
+    }
+
+    private var existingOffsetRatio: Double {
+        guard let sourceAmount = editingTransaction?.amount, sourceAmount > 0 else { return 0 }
+        return existingOffsetAmount / sourceAmount * 100
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -174,7 +188,9 @@ struct CreateTransactionView: View {
                             amount: transactionAmount,
                             happenedAt: draft.happenedAt,
                             preferredCategoryID: preferredOffsetCategoryID,
-                            categories: offsetIncomeCategories
+                            categories: offsetIncomeCategories,
+                            existingRatio: existingOffsetRatio,
+                            existingAmount: existingOffsetAmount
                         )
                     }
 
@@ -190,6 +206,7 @@ struct CreateTransactionView: View {
                     }
                 }
             }
+            .dismissKeyboardWhenTappedOutside()
             .navigationTitle(editingTransaction == nil ? "新增流水" : "修改流水")
             .task {
                 if store.books.isEmpty {
@@ -295,12 +312,15 @@ struct CreateTransactionView: View {
     } message: {
         Text(saveFailureMessage ?? "请检查填写内容后重试。")
     }
-    .confirmationDialog("抵扣比例超过 100%", isPresented: $showOffsetOverLimitConfirmation, titleVisibility: .visible) {
-        Button("仍按原比例创建") { Task { await performSaveDraft(normalizeOffsets: false) } }
-        Button("调整合计为 100%") { Task { await performSaveDraft(normalizeOffsets: true) } }
-        Button("继续编辑", role: .cancel) {}
-    } message: {
-        Text("当前共 \(Int(totalOffsetRatio))%，预计生成 \(totalOffsetAmount.cnyText) 的收入。可以保留原比例，或按比例压缩至合计 100%。")
+    .sheet(isPresented: $showOffsetOverLimitConfirmation) {
+        OffsetLimitConfirmationSheet(
+            ratio: combinedOffsetRatio,
+            amount: combinedOffsetAmount,
+            onKeep: { showOffsetOverLimitConfirmation = false; Task { await performSaveDraft(normalizeOffsets: false) } },
+            onNormalize: { showOffsetOverLimitConfirmation = false; Task { await performSaveDraft(normalizeOffsets: true) } }
+        )
+        .presentationDetents([.height(300)])
+        .presentationDragIndicator(.visible)
     }
 }
 }
@@ -326,6 +346,8 @@ private func offsetGeneratedAmount(for offset: OffsetDraft) -> Double {
 
 private var totalOffsetRatio: Double { draft.offsets.reduce(0) { $0 + max($1.ratio, 0) } }
 private var totalOffsetAmount: Double { draft.offsets.reduce(0) { $0 + offsetGeneratedAmount(for: $1) } }
+private var combinedOffsetRatio: Double { existingOffsetRatio + totalOffsetRatio }
+private var combinedOffsetAmount: Double { existingOffsetAmount + totalOffsetAmount }
 private var offsetIncomeCategories: [LedgerCategory] {
     store.flattenedCategories.filter { $0.flowType == .income }
 }
@@ -391,7 +413,7 @@ private func saveDraftAndDismiss() async {
         saveFailureMessage = "请为抵扣流水选择“报销”或“退款”收入分类。"
         return
     }
-    if totalOffsetRatio > 100 {
+    if combinedOffsetRatio > 100 {
         showOffsetOverLimitConfirmation = true
         return
     }
@@ -400,7 +422,8 @@ private func saveDraftAndDismiss() async {
 
 private func performSaveDraft(normalizeOffsets: Bool) async {
     if normalizeOffsets, totalOffsetRatio > 0 {
-        let scale = 100 / totalOffsetRatio
+        let availableRatio = max(100 - existingOffsetRatio, 0)
+        let scale = availableRatio / totalOffsetRatio
         for index in draft.offsets.indices { draft.offsets[index].ratio *= scale }
     }
     if selectedBookSupportsSplit && draft.paidByParticipantId == nil {
@@ -469,19 +492,55 @@ private struct OffsetIncomeCategoryPickerItem: View {
     }
 }
 
+private struct OffsetLimitConfirmationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let ratio: Double
+    let amount: Double
+    let onKeep: () -> Void
+    let onNormalize: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Label("累计抵扣超过 100%", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                Spacer()
+                Button("取消") { dismiss() }
+                    .foregroundStyle(.secondary)
+            }
+            Text("当前累计 \(Int(ratio.rounded()))%，预计生成 \(amount.cnyText) 的收入。请选择如何处理新增抵扣。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            VStack(spacing: 10) {
+                Button("仍按原比例创建") { onKeep() }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                Button("调整新增抵扣至合计 100%") { onNormalize() }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(22)
+        .presentationBackground(.regularMaterial)
+    }
+}
+
 private struct OffsetDraftSection: View {
     @Binding var offsets: [OffsetDraft]
     let amount: Double
     let happenedAt: Date
     let preferredCategoryID: Int?
     let categories: [LedgerCategory]
+    let existingRatio: Double
+    let existingAmount: Double
 
     private var totalRatio: Double {
         offsets.reduce(0) { $0 + $1.ratio }
     }
 
     private var totalAmount: Double {
-        offsets.reduce(0) { $0 + amount * $1.ratio / 100 }
+        existingAmount + offsets.reduce(0) { $0 + amount * $1.ratio / 100 }
     }
 
     var body: some View {
@@ -504,11 +563,15 @@ private struct OffsetDraftSection: View {
                 }
             }
             if !offsets.isEmpty {
-                LabeledContent("抵扣合计", value: "\(Int(totalRatio))% · \(totalAmount.cnyText)")
+                LabeledContent("累计抵扣", value: "\(Int(existingRatio + totalRatio))% · \(totalAmount.cnyText)")
+                    .font(.subheadline.weight(.semibold))
+            } else if existingRatio > 0 {
+                LabeledContent("已抵扣", value: "\(Int(existingRatio))% · \(existingAmount.cnyText)")
                     .font(.subheadline.weight(.semibold))
             }
             Button {
-                offsets.append(OffsetDraft(categoryId: preferredCategoryID, ratio: 100, happenedAt: happenedAt))
+                let available = max(100 - existingRatio - totalRatio, 0)
+                offsets.append(OffsetDraft(categoryId: preferredCategoryID, ratio: available > 0 ? available : 100, happenedAt: happenedAt))
             } label: {
                 Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
             }
