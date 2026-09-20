@@ -917,8 +917,15 @@ private struct ScrollableDistributionBarChart: View {
            )
            .foregroundStyle(item.displayColor)
            .annotation(position: .top, spacing: 6) {
-             Text(item.amount.cnyShortText)
-               .font(.caption2.weight(.semibold))
+             VStack(spacing: 2) {
+               Text(item.amount.cnyShortText)
+                 .font(.caption2.weight(.semibold))
+               Text(item.category)
+                 .font(.caption2)
+                 .lineLimit(1)
+                 .minimumScaleFactor(0.75)
+             }
+             .foregroundStyle(.primary)
            }
          }
        }

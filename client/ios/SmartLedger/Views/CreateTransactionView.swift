@@ -14,6 +14,8 @@ struct CreateTransactionView: View {
     @State private var showUnsavedChangesDialog = false
     @State private var saveFailureMessage: String?
     @State private var showOffsetOverLimitConfirmation = false
+    @State private var showCancelInstallmentConfirmation = false
+    @State private var showPayoffInstallmentConfirmation = false
 
     init(editingTransaction: LedgerTransaction? = nil) {
         self.editingTransaction = editingTransaction
@@ -45,9 +47,21 @@ struct CreateTransactionView: View {
         selectedBook?.splitEnabled == true
     }
 
+    private var selectedBookUsesAnonymousSplit: Bool {
+        selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
+    }
+
+    private var selectedBookRequiresNamedSplit: Bool {
+        selectedBookSupportsSplit && !selectedBookUsesAnonymousSplit
+    }
+
+    private var editingInstallment: Bool {
+        editingTransaction?.installmentGroupId != nil
+    }
+
     private var existingOffsetTransactions: [LedgerTransaction] {
         guard let sourceId = editingTransaction?.id else { return [] }
-        return store.transactions.filter { $0.offsetSourceTransactionId == sourceId && $0.kind == .income }
+        return store.transactions.filter { $0.linkedOffsetSourceID == sourceId && $0.kind == .income }
     }
 
     private var existingOffsetAmount: Double {
@@ -57,6 +71,55 @@ struct CreateTransactionView: View {
     private var existingOffsetRatio: Double {
         guard let sourceAmount = editingTransaction?.amount, sourceAmount > 0 else { return 0 }
         return existingOffsetAmount / sourceAmount * 100
+    }
+
+    private func addSuggestedBook(_ book: LedgerBook) {
+        guard !draft.bookIds.contains(book.id) else { return }
+        draft.bookIds.append(book.id)
+        draft.bookId = draft.bookIds.first
+    }
+
+    @ViewBuilder
+    private func suggestedBookRow(_ book: LedgerBook) -> some View {
+        Button { addSuggestedBook(book) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles.rectangle.stack.fill")
+                    .foregroundStyle(.purple)
+                Text(book.name)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if draft.bookIds.contains(book.id) {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.blue)
+                } else {
+                    Text("添加")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.purple)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var categoryPickerRow: some View {
+        Button {
+            showCategoryPicker = true
+        } label: {
+            HStack {
+                Text("分类")
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text(selectedCategoryDisplayName)
+                    .foregroundStyle(draft.categoryId == nil ? .secondary : .primary)
+                    .multilineTextAlignment(.trailing)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     var body: some View {
@@ -76,23 +139,7 @@ struct CreateTransactionView: View {
                 }
 
                 Section("分类") {
-                    Button {
-                        showCategoryPicker = true
-                    } label: {
-                        HStack {
-                            Text("分类")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Text(selectedCategoryDisplayName)
-                                .foregroundStyle(draft.categoryId == nil ? .secondary : .primary)
-                                .multilineTextAlignment(.trailing)
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                    categoryPickerRow
 
                     if store.books.isEmpty {
                         Text("暂无账本")
@@ -117,35 +164,18 @@ struct CreateTransactionView: View {
                                 .foregroundStyle(.secondary)
 
                             ForEach(suggestedBooks) { book in
-                                Button {
-                                    if !draft.bookIds.contains(book.id) {
-                                        draft.bookIds.append(book.id)
-                                        draft.bookId = draft.bookIds.first
-                                    }
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "sparkles.rectangle.stack.fill")
-                                            .foregroundStyle(.purple)
-                                        Text(book.name)
-                                            .foregroundStyle(.primary)
-                                        Spacer()
-                                        if draft.bookIds.contains(book.id) {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(.blue)
-                                        } else {
-                                            Text("添加")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.purple)
-                                        }
-                                    }
-                                }
-                                .buttonStyle(.plain)
+                                suggestedBookRow(book)
                             }
                         }
                     }
 
                     if let selectedBook, selectedBookSupportsSplit {
                         Section("多人分账 - \(selectedBook.name)") {
+                            if selectedBookUsesAnonymousSplit {
+                                Label("自动归集账本按 \(splitParticipants.count) 人均分，不记录具体付款人", systemImage: "person.3.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            } else {
                                 Picker("付款人", selection: Binding(
                                 get: { draft.paidByParticipantId },
                                 set: { draft.paidByParticipantId = $0 }
@@ -171,14 +201,30 @@ struct CreateTransactionView: View {
                                     )
                                 }
                             }
+                            }
                         }
                     }
 
                     Section("分期") {
-                        Toggle("启用分期", isOn: $draft.installmentEnabled)
-                        if draft.installmentEnabled {
-                            Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 1...36)
-                            DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
+                        if editingInstallment {
+                            Label("这是一组已有的分期流水，编辑不会重新拆分金额。", systemImage: "info.circle")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("取消分期并合并") { showCancelInstallmentConfirmation = true }
+                            Button("立即还清剩余分期") { showPayoffInstallmentConfirmation = true }
+                                .foregroundStyle(.orange)
+                        } else {
+                            Toggle("启用分期", isOn: $draft.installmentEnabled)
+                                .disabled(editingTransaction != nil)
+                            if editingTransaction != nil {
+                                Text("已有流水不能重新开启分期；如需分期请新增一笔流水。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if draft.installmentEnabled && editingTransaction == nil {
+                                Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 1...36)
+                                DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
+                            }
                         }
                     }
 
@@ -307,7 +353,7 @@ struct CreateTransactionView: View {
     } message: {
         Text("退出前可以选择先保存，或者直接丢弃这次改动。")
     }
-    .alert("无法保存流水", isPresented: Binding(get: { saveFailureMessage != nil }, set: { if !$0 { saveFailureMessage = nil } })) {
+    .alert("无法保存流水", isPresented: saveFailureBinding) {
         Button("知道了", role: .cancel) {}
     } message: {
         Text(saveFailureMessage ?? "请检查填写内容后重试。")
@@ -322,8 +368,31 @@ struct CreateTransactionView: View {
         .presentationDetents([.height(300)])
         .presentationDragIndicator(.visible)
     }
+    .confirmationDialog("取消分期并合并？", isPresented: $showCancelInstallmentConfirmation, titleVisibility: .visible) {
+        Button("合并为一笔流水", role: .destructive) {
+            Task { await cancelInstallment() }
+        }
+        Button("继续编辑", role: .cancel) {}
+    } message: {
+        Text("所有已生成的分期金额会合并为一笔，未来分期不再单独显示。")
+    }
+    .confirmationDialog("立即还清剩余分期？", isPresented: $showPayoffInstallmentConfirmation, titleVisibility: .visible) {
+        Button("立即还清", role: .destructive) {
+            requestPayOffInstallment()
+        }
+        Button("取消", role: .cancel) {}
+    } message: {
+        Text("会生成一笔当前时间的还清流水，并移除尚未到期的分期记录。")
+    }
 }
 }
+private var saveFailureBinding: Binding<Bool> {
+    Binding(
+        get: { saveFailureMessage != nil },
+        set: { if !$0 { saveFailureMessage = nil } }
+    )
+}
+
 private var selectedBookNamesText: String {
     let names = selectedBooks.map(\.name)
     return names.isEmpty ? "不归属于主题账本" : names.joined(separator: "、")
@@ -350,6 +419,10 @@ private var combinedOffsetRatio: Double { existingOffsetRatio + totalOffsetRatio
 private var combinedOffsetAmount: Double { existingOffsetAmount + totalOffsetAmount }
 private var offsetIncomeCategories: [LedgerCategory] {
     store.flattenedCategories.filter { $0.flowType == .income }
+}
+
+private func requestPayOffInstallment() {
+    Task { await payOffInstallment() }
 }
 
 private var selectedCategoryDisplayName: String {
@@ -426,11 +499,11 @@ private func performSaveDraft(normalizeOffsets: Bool) async {
         let scale = availableRatio / totalOffsetRatio
         for index in draft.offsets.indices { draft.offsets[index].ratio *= scale }
     }
-    if selectedBookSupportsSplit && draft.paidByParticipantId == nil {
+    if selectedBookRequiresNamedSplit && draft.paidByParticipantId == nil {
         saveFailureMessage = "该账本启用了分账，请选择付款人。"
         return
     }
-    if selectedBookSupportsSplit && draft.splitParticipantIds.isEmpty {
+    if selectedBookRequiresNamedSplit && draft.splitParticipantIds.isEmpty {
         saveFailureMessage = "该账本启用了分账，请至少选择一位分账成员。"
         return
     }
@@ -452,6 +525,28 @@ private func performSaveDraft(normalizeOffsets: Bool) async {
         await store.createTransaction(draft)
     }
 
+    if let error = store.errorMessage {
+        saveFailureMessage = error
+    } else {
+        dismiss()
+    }
+}
+
+private func cancelInstallment() async {
+    guard let editingTransaction else { return }
+    store.errorMessage = nil
+    await store.cancelInstallment(for: editingTransaction.id)
+    if let error = store.errorMessage {
+        saveFailureMessage = error
+    } else {
+        dismiss()
+    }
+}
+
+private func payOffInstallment() async {
+    guard let editingTransaction else { return }
+    store.errorMessage = nil
+    await store.payOffInstallment(for: editingTransaction.id)
     if let error = store.errorMessage {
         saveFailureMessage = error
     } else {

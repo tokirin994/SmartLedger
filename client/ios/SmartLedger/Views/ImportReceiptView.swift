@@ -1,14 +1,24 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+// Batch import UI supports screenshots and exported bill files.
 
 struct ImportReceiptView: View {
     @EnvironmentObject private var store: LedgerStore
     @EnvironmentObject var settings: AppSettings
-    @State private var selectedItem: PhotosPickerItem?
-    @State private var selectedImage: UIImage?
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedImages: [UIImage] = []
     @State private var recognizedText: String = ""
     @State private var isRecognizing = false
+    @State private var importMode: ImportMode = .image
+    @State private var showFileImporter = false
+    @State private var importedFileNames: [String] = []
+    @State private var pendingImportSource = "ocr"
+    @State private var pendingModeAfterDiscard: ImportMode?
+    @State private var showModeDiscardConfirmation = false
+    @State private var isRevertingMode = false
+    @State private var activeImportToken = UUID()
     @State private var draft = TransactionDraft(source: "ocr")
     @State private var selectedBatchIDs: Set<String> = []
     @State private var showClearConfirmation = false
@@ -19,33 +29,68 @@ struct ImportReceiptView: View {
     var body: some View {
         NavigationStack {
             ScrollView(.vertical) {
-                SectionCard(title: "导入截图") {
-                    PhotosPicker(selection: $selectedItem, matching: .images) {
-                        Label("选择截图", systemImage: "photo.on.rectangle")
-                            .frame(maxWidth: .infinity)
+                SectionCard(title: "导入流水") {
+                    Picker("导入方式", selection: $importMode) {
+                        ForEach(ImportMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    
-                    if let selectedImage {
-                        Image(uiImage: selectedImage)
-                            .resizable()
-                            .scaledToFit()
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .overlay(alignment: .topTrailing) {
-                                Text("OCR")
+                    .pickerStyle(.segmented)
 
-        .font(.caption2.weight(.bold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.72), in: Capsule())
-        .foregroundStyle(.white)
-        .padding(10)
+                    if importMode == .image {
+                        PhotosPicker(selection: $selectedItems, maxSelectionCount: 12, matching: .images) {
+                            Label("选择一张或多张截图", systemImage: "photo.on.rectangle.angled")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        if !selectedImages.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(Array(selectedImages.enumerated()), id: \.offset) { _, image in
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 86, height: 86)
+                                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                            .overlay(alignment: .topTrailing) {
+                                                Text("OCR")
+                                                    .font(.caption2.weight(.bold))
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 4)
+                                                    .background(Color.black.opacity(0.72), in: Capsule())
+                                                    .foregroundStyle(.white)
+                                                    .padding(5)
+                                            }
+                                    }
+                                }
                             }
+                            Text("已选择 \(selectedImages.count) 张截图，将合并为一个待确认列表")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button {
+                            showFileImporter = true
+                        } label: {
+                            Label("选择账单文件（可多选）", systemImage: "doc.badge.plus")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Text("支持支付宝、微信、美团、京东导出的 CSV / TXT / XLSX 文件")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if !importedFileNames.isEmpty {
+                            Label(importedFileNames.joined(separator: "、"), systemImage: "doc.text")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
                     }
                 }
     
     if isRecognizing {
-        ProgressView("正在识别截图...")
+        ProgressView(importMode == .image ? "正在识别截图..." : "正在读取账单文件...")
     }
     
     Group {
@@ -53,26 +98,45 @@ struct ImportReceiptView: View {
             batchImportSection
         } else if let parsed = store.parsedImport {
             singleImportSection(parsed: parsed)
-        } else if selectedImage != nil, !isRecognizing, !recognizedText.isEmpty {
+        } else if (!selectedImages.isEmpty || !importedFileNames.isEmpty), !isRecognizing {
             SectionCard(title: "未解析出结构化账单") {
-                EmptyView()
+                Text("未解析出结构化流水，请更换文件或图片后重试。")
+                    .foregroundStyle(.secondary)
             }
         }
     }
     .padding()
 }
 .appBackground()
-.navigationTitle("图片识别")
+.navigationTitle(importMode == .image ? "识图导入" : "文件导入")
 .toolbar {
-    if selectedImage != nil || store.hasPendingOCRImport {
+    if !selectedImages.isEmpty || !importedFileNames.isEmpty || store.hasPendingOCRImport {
         ToolbarItem(placement: .topBarTrailing) {
             Button("清空", role: .destructive) { showClearConfirmation = true }
         }
     }
 }
-.onChange(of: selectedItem) { _, newValue in
-    guard let newValue else { return }
-    Task { await loadImage(from: newValue) }
+.onChange(of: selectedItems) { _, newValue in
+    guard !newValue.isEmpty else { return }
+    Task { await loadImages(from: newValue) }
+}
+.onChange(of: importMode) { oldValue, newValue in
+    if isRevertingMode {
+        isRevertingMode = false
+        return
+    }
+    guard oldValue != newValue, store.hasPendingOCRImport else { return }
+    pendingModeAfterDiscard = newValue
+    isRevertingMode = true
+    importMode = oldValue
+    showModeDiscardConfirmation = true
+}
+.fileImporter(
+    isPresented: $showFileImporter,
+    allowedContentTypes: [.commaSeparatedText, .plainText, .spreadsheet, .data],
+    allowsMultipleSelection: true
+) { result in
+    Task { await importBillFiles(result) }
 }
 .onReceive(NotificationCenter.default.publisher(for: .smartLedgerDiscardOCRImport)) { _ in
     clearImportState()
@@ -88,6 +152,19 @@ struct ImportReceiptView: View {
 } message: {
     Text(importSaveError ?? "请补全标题和金额后重试。")
 }
+.alert("切换导入方式？", isPresented: $showModeDiscardConfirmation) {
+    Button("切换并丢弃", role: .destructive) {
+        clearImportState()
+        if let mode = pendingModeAfterDiscard {
+            pendingModeAfterDiscard = nil
+            isRevertingMode = true
+            importMode = mode
+        }
+    }
+    Button("留在当前页面", role: .cancel) { pendingModeAfterDiscard = nil }
+} message: {
+    Text("当前还有未保存的识别结果，切换方式会丢弃这些待确认流水。")
+}
 .sheet(item: $editingBatchItem) { item in
     OCRBatchItemEditor(item: item) { updated in
         replaceBatchItem(updated)
@@ -96,56 +173,72 @@ struct ImportReceiptView: View {
     .environmentObject(settings)
 }
         }
-    }
+}
+
+private enum ImportMode: String, CaseIterable, Identifiable, Hashable {
+    case image
+    case file
+
+    var id: String { rawValue }
+    var title: String { self == .image ? "截图识别" : "账单文件" }
+    var systemImage: String { self == .image ? "camera.viewfinder" : "doc.badge.plus" }
+}
 
 private var batchImportSection: some View {
     SectionCard(title: "待确认流水（\(store.parsedImportItems.count) 笔）") {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(store.parsedImportItems) { item in
-                Button {
-                    toggleBatchSelection(item.id)
-                } label: {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: selectedBatchIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selectedBatchIDs.contains(item.id) ? .blue : .secondary)
-                            .font(.title3)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text(item.title ?? "未命名流水")
-                                    .font(.headline)
-                                Spacer()
-                                Text(item.amount.map { $0.cnyText } ?? "待填写")
-                                    .font(.headline.weight(.semibold))
-                                    .foregroundStyle(item.amount == nil ? .orange : .primary)
-                            }
-                            Text(item.happenedAt?.formatted(date: .abbreviated, time: .shortened) ?? "未识别时间")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if let merchant = item.merchant, merchant != item.title {
-                                Text("商户: \(merchant)")
+                HStack(alignment: .top, spacing: 8) {
+                    Button {
+                        toggleBatchSelection(item.id)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: selectedBatchIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedBatchIDs.contains(item.id) ? .blue : .secondary)
+                                .font(.title3)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(item.title ?? "未命名流水")
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(item.amount.map { $0.cnyText } ?? "待填写")
+                                        .font(.headline.weight(.semibold))
+                                        .foregroundStyle(item.amount == nil ? .orange : .primary)
+                                }
+                                Text(item.happenedAt?.formatted(date: .abbreviated, time: .shortened) ?? "未识别时间")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                            }
-                            if let paymentMethod = item.paymentMethod, !paymentMethod.isEmpty {
-                                Text("支付路径: \(paymentMethod)")
+                                if let merchant = item.merchant, merchant != item.title {
+                                    Text("商户: \(merchant)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let paymentMethod = item.paymentMethod, !paymentMethod.isEmpty {
+                                    Text("支付路径: \(paymentMethod)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text((item.categoryPath ?? []).isEmpty ? "未分类" : (item.categoryPath ?? []).joined(separator: " / "))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let source = item.details?.first(where: { $0.label == "导入来源" })?.value {
+                                    Text(source)
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(.blue)
+                                }
                             }
-                            Text((item.categoryPath ?? []).isEmpty ? "未分类" : (item.categoryPath ?? []).joined(separator: " / "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
+                        .padding(12)
                     }
-                    .padding(12)
-                    .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
-                }
-                .buttonStyle(.plain)
-                .overlay(alignment: .bottomTrailing) {
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
                     Button("编辑") { editingBatchItem = item }
                         .font(.caption.weight(.semibold))
                         .buttonStyle(.bordered)
-                        .padding(18)
+                        .padding(.top, 12)
+                        .padding(.trailing, 12)
                 }
+                .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
             }
             HStack(spacing: 12) {
                 Button("全选") {
@@ -267,6 +360,15 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
                     .textFieldStyle(.roundedBorder)
                 TextField("备注", text: $draft.note)
                     .textFieldStyle(.roundedBorder)
+                TextField("原价", text: $draft.originalAmount)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+                TextField("优惠金额", text: $draft.discountAmount)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
+                TextField("溢价金额", text: $draft.premiumAmount)
+                    .keyboardType(.decimalPad)
+                    .textFieldStyle(.roundedBorder)
             }
             .frame(maxWidth: .infinity)
         }
@@ -318,7 +420,7 @@ private var ocrOffsetAmount: Double {
 }
 
 private func applyParsedDefaults(parsed: OCRImportResult) {
-    draft = TransactionDraft(parsed: parsed, source: "ocr")
+    draft = TransactionDraft(parsed: parsed, source: pendingImportSource)
     draft.ocrText = recognizedText
     applyParsedCategorySuggestion(parsed: parsed)
 }
@@ -330,22 +432,79 @@ private func applyParsedCategorySuggestion(parsed: OCRImportResult) {
     draft.categoryId = matched.id
 }
 
-private func loadImage(from item: PhotosPickerItem) async {
+private func loadImages(from items: [PhotosPickerItem]) async {
     do {
+        let token = UUID()
+        activeImportToken = token
         isRecognizing = true
         store.clearOCRImport()
+        store.beginImportSelection()
         selectedBatchIDs.removeAll()
         recognizedText = ""
-        if let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-            selectedImage = image
-            recognizedText = try await ocrService.recognizeText(from: image)
-            await store.parseOCR(text: recognizedText)
-            selectedBatchIDs = Set(store.parsedImportItems.map(\.id))
+        pendingImportSource = "ocr"
+        importedFileNames.removeAll()
+        selectedImages.removeAll()
+        var texts: [String] = []
+        for item in items {
+            guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else { continue }
+            guard activeImportToken == token else { return }
+            selectedImages.append(image)
+            texts.append(try await ocrService.recognizeText(from: image))
         }
+        guard activeImportToken == token else { return }
+        recognizedText = texts.joined(separator: "\n")
+        await store.parseOCRBatch(texts: texts)
+        guard activeImportToken == token else { return }
+        selectedBatchIDs = Set(store.parsedImportItems.map(\.id))
         isRecognizing = false
     } catch {
         isRecognizing = false
-        store.errorMessage = error.localizedDescription
+        importSaveError = "识别失败：\(error.localizedDescription)"
+    }
+}
+
+private func importBillFiles(_ result: Result<[URL], Error>) async {
+    do {
+        let urls = try result.get()
+        let token = UUID()
+        activeImportToken = token
+        isRecognizing = true
+        store.clearOCRImport()
+        store.beginImportSelection()
+        selectedBatchIDs.removeAll()
+        selectedImages.removeAll()
+        recognizedText = ""
+        pendingImportSource = "file"
+        var items: [OCRImportResult] = []
+        var names: [String] = []
+        var failures: [String] = []
+        let parser = BillFileImportService()
+        for url in urls {
+            guard activeImportToken == token else { return }
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            names.append(url.lastPathComponent)
+            do {
+                let parsed = try parser.parse(url: url)
+                items.append(contentsOf: parsed)
+            } catch {
+                failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        guard activeImportToken == token else { return }
+        importedFileNames = names
+        await store.setPendingImportItems(items)
+        guard activeImportToken == token else { return }
+        selectedBatchIDs = Set(store.parsedImportItems.map(\.id))
+        isRecognizing = false
+        if items.isEmpty {
+            importSaveError = failures.isEmpty ? "文件中没有识别到可导入的收支流水。" : failures.joined(separator: "\n")
+        } else if !failures.isEmpty {
+            importSaveError = "部分文件未能导入：\n" + failures.joined(separator: "\n")
+        }
+    } catch {
+        isRecognizing = false
+        importSaveError = error.localizedDescription
     }
 }
 
@@ -357,7 +516,7 @@ private func saveSelectedBatchItems() async {
         return
     }
     for item in selected {
-        var draft = TransactionDraft(parsed: item, source: "ocr")
+        var draft = TransactionDraft(parsed: item, source: pendingImportSource)
         draft.ocrText = recognizedText
         if !draft.paymentMethod.isEmpty {
             draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
@@ -365,13 +524,20 @@ private func saveSelectedBatchItems() async {
         if let matched = store.findCategory(bySuggestedPath: item.categoryPath ?? []), matched.flowType == draft.kind {
             draft.categoryId = matched.id
         }
+        store.errorMessage = nil
         await store.createTransaction(draft)
         if let error = store.errorMessage {
             importSaveError = "“\(draft.title)”保存失败：\(error)"
             return
         }
     }
-    clearImportState()
+    let remaining = store.parsedImportItems.filter { !selectedBatchIDs.contains($0.id) }
+    if remaining.isEmpty {
+        clearImportState()
+    } else {
+        store.setPendingImportItems(remaining)
+        selectedBatchIDs.removeAll()
+    }
 }
 
 private func saveSingleImport() async {
@@ -405,12 +571,17 @@ private func toggleBatchSelection(_ id: String) {
 }
 
 private func clearImportState() {
+    activeImportToken = UUID()
+    isRecognizing = false
     store.clearOCRImport()
-    selectedItem = nil
-    selectedImage = nil
+    selectedItems.removeAll()
+    selectedImages.removeAll()
     recognizedText = ""
+    importedFileNames.removeAll()
+    pendingImportSource = "ocr"
     selectedBatchIDs.removeAll()
     draft = TransactionDraft(source: "ocr")
+    pendingModeAfterDiscard = nil
 }
 
 private struct OCRBatchItemEditor: View {
@@ -440,6 +611,9 @@ private struct OCRBatchItemEditor: View {
                     DatePicker("时间", selection: $draft.happenedAt)
                     TextField("商户", text: $draft.merchant)
                     TextField("支付渠道", text: $draft.paymentMethod)
+                    TextField("原价", text: $draft.originalAmount).keyboardType(.decimalPad)
+                    TextField("优惠金额", text: $draft.discountAmount).keyboardType(.decimalPad)
+                    TextField("溢价金额", text: $draft.premiumAmount).keyboardType(.decimalPad)
                     Picker("分类", selection: $draft.categoryId) {
                         Text("未分类").tag(Int?.none)
                         ForEach(store.selectableCategories(for: draft.kind)) { category in
@@ -450,6 +624,7 @@ private struct OCRBatchItemEditor: View {
             }
             .navigationTitle("编辑识别结果")
             .navigationBarTitleDisplayMode(.inline)
+            .dismissKeyboardWhenTappedOutside()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -466,6 +641,9 @@ private struct OCRBatchItemEditor: View {
                         let paymentMethod = draft.paymentMethod.trimmingCharacters(in: .whitespacesAndNewlines)
                         updated.merchant = merchant.isEmpty ? nil : merchant
                         updated.paymentMethod = paymentMethod.isEmpty ? nil : paymentMethod
+                        updated.originalAmount = Double(draft.originalAmount)
+                        updated.discountAmount = Double(draft.discountAmount)
+                        updated.premiumAmount = Double(draft.premiumAmount)
                         if let categoryId = draft.categoryId,
                            let category = store.selectableCategories(for: draft.kind).first(where: { $0.id == categoryId }) {
                             updated.categoryPath = category.pathComponents
@@ -511,3 +689,6 @@ private func replaceBatchItem(_ updated: OCRImportResult) {
 }
 
 }
+// End of ImportReceiptView.
+//
+//

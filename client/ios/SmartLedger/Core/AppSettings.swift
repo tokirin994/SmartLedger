@@ -334,14 +334,13 @@ struct AppBackdrop: View {
 }
 
 extension View {
-    /// Keeps editing lightweight throughout the app: a tap on any other UI
-    /// surface dismisses the current text input without consuming that tap.
-    /// `simultaneousGesture` deliberately preserves buttons, navigation links,
-    /// pickers and scrolling behaviour.
+    /// Dismisses text input from every screen, including decimal keyboards
+    /// that do not provide a Return/Done key. A zero-distance drag receives a
+    /// tap as well as a small touch movement without consuming child actions.
     func dismissKeyboardWhenTappedOutside() -> some View {
         contentShape(Rectangle())
         .simultaneousGesture(
-            TapGesture().onEnded {
+            DragGesture(minimumDistance: 0).onEnded { _ in
                 UIApplication.shared.sendAction(
                     #selector(UIResponder.resignFirstResponder),
                     to: nil,
@@ -349,11 +348,6 @@ extension View {
                     for: nil
                 )
             },
-            // Do not participate in child control/navigation gestures. The
-            // gesture remains available on each page's empty background.
-            // Include taps delivered by descendants so this also works in
-            // Form/List controls and sheets, while simultaneousGesture keeps
-            // the descendant action (navigation, buttons, pickers) intact.
             including: .subviews
         )
     }

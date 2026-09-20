@@ -45,6 +45,7 @@ struct BooksView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .dismissKeyboardWhenTappedOutside()
             .navigationTitle("账本")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button { Task { await store.loadBooks() } } label: { Image(systemName: "arrow.clockwise") } }
@@ -163,6 +164,7 @@ private struct BookDetailView: View {
             }.padding()
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .dismissKeyboardWhenTappedOutside()
         .navigationTitle(current.name).navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Menu { Button("设置") { showingEditor = true }; Button("导出账本") { showExportFormatPicker = true }; Button(current.isPinned ? "取消置顶" : "置顶") { Task { await store.setBookPinned(current.id, pinned: !current.isPinned) } }; Button("删除账本", role: .destructive) { deleteRequested = true } } label: { Image(systemName: "gearshape") } } }
         .sheet(isPresented: $showingEditor) { BookEditorView(book: current).environmentObject(store) }
@@ -182,7 +184,36 @@ private struct BookDetailView: View {
     }
 
     private var budgetCard: some View { let limit = current.budgetLimitAmount ?? 0; let remaining = limit - current.expenseAmount; return VStack(alignment: .leading, spacing: 12) { Text("账本预算").font(.title3.bold()); HStack(spacing: 10) { metric("预算", limit.cnyText, .blue); metric("已用", current.expenseAmount.cnyText, .orange); metric("剩余", remaining.cnyText, remaining < 0 ? .red : .green) }; ProgressView(value: min(max(current.expenseAmount / max(limit, 1), 0), 1)).tint(remaining < 0 ? .red : .blue); Text("预算周期：\(periodText)").font(.caption).foregroundStyle(.secondary) }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
-    private var splitCard: some View { VStack(alignment: .leading, spacing: 14) { Text("最终分账").font(.title3.bold()); ForEach(current.participants) { member in let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }; let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }; let net = paid - owed; VStack(alignment: .leading, spacing: 8) { HStack { Text(member.name).font(.headline); Spacer(); Text(net >= 0 ? "应收 \(net.cnyText)" : "应付 \((-net).cnyText)").foregroundStyle(net >= 0 ? .green : .orange) }; HStack(spacing: 10) { metric("已支付", paid.cnyText, .blue); metric("应承担", owed.cnyText, .purple) } } } }.padding().glassCard(cornerRadius: 20, strokeOpacity: 0.15) }
+    private var splitCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("最终分账").font(.title3.bold())
+            if current.autoCollectEnabled {
+                Label("归集流水按 \(max(current.participants.count, 1)) 人均分，不记录具体付款人", systemImage: "person.3.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(current.participants) { member in
+                    let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }
+                    let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }
+                    let net = paid - owed
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(member.name).font(.headline)
+                            Spacer()
+                            Text(net >= 0 ? "应收 \(net.cnyText)" : "应付 \((-net).cnyText)")
+                                .foregroundStyle(net >= 0 ? .green : .orange)
+                        }
+                        HStack(spacing: 10) {
+                            metric("已支付", paid.cnyText, .blue)
+                            metric("应承担", owed.cnyText, .purple)
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .glassCard(cornerRadius: 20, strokeOpacity: 0.15)
+    }
     private var transactionsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {

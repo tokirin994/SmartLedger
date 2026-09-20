@@ -10,6 +10,7 @@ final class LedgerStore: ObservableObject {
     @Published var budgets: [BudgetItem] = []
     @Published var parsedImport: OCRImportResult?
     @Published var parsedImportItems: [OCRImportResult] = []
+    @Published private(set) var hasPendingImportSelection = false
     @Published var categoryTrend: CategoryTrendResponse?
     @Published var activeRangePreset: DateRangePreset = .currentMonth
     @Published var activeCustomRange: CustomDateRange = .recent30Days
@@ -154,19 +155,43 @@ final class LedgerStore: ObservableObject {
     func loadTransactions(bookId: Int?) async {}
 
     func parseOCR(text: String) async {
+        hasPendingImportSelection = true
         let result = parser.parse(rawText: text)
         parsedImport = result
         let multiple = parser.parseMultiple(rawText: text)
         parsedImportItems = multiple.isEmpty ? [result] : multiple
     }
 
+    /// Parses several screenshots as one review batch. Each image may contain
+    /// one or many transactions; all candidates are kept in the same editable
+    /// confirmation list so the user can select, edit, or discard individually.
+    func parseOCRBatch(texts: [String]) async {
+        hasPendingImportSelection = true
+        let candidates = texts.flatMap { text -> [OCRImportResult] in
+            let multiple = parser.parseMultiple(rawText: text)
+            return multiple.isEmpty ? [parser.parse(rawText: text)] : multiple
+        }
+        setPendingImportItems(candidates)
+    }
+
+    func setPendingImportItems(_ items: [OCRImportResult]) {
+        hasPendingImportSelection = !items.isEmpty
+        parsedImportItems = items
+        parsedImport = items.first
+    }
+
+    func beginImportSelection() {
+        hasPendingImportSelection = true
+    }
+
     func clearOCRImport() {
+        hasPendingImportSelection = false
         parsedImport = nil
         parsedImportItems = []
     }
 
     var hasPendingOCRImport: Bool {
-        parsedImport != nil || !parsedImportItems.isEmpty
+        hasPendingImportSelection || parsedImport != nil || !parsedImportItems.isEmpty
     }
 
     func createTransaction(_ draft: TransactionDraft) async {
@@ -186,10 +211,13 @@ final class LedgerStore: ObservableObject {
         let bookName = selectedBook?.name
         let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
-        let resolvedSplitParticipants = bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
-        let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let anonymousBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
+        let resolvedSplitParticipants = anonymousBookSplit
+            ? bookParticipants
+            : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
+        let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
 
-        if selectedBook?.splitEnabled == true {
+        if selectedBook?.splitEnabled == true && !anonymousBookSplit {
             guard !resolvedSplitParticipants.isEmpty else {
                 errorMessage = "账本流水请至少选择 1 位分账成员"
                 return
@@ -267,7 +295,7 @@ final class LedgerStore: ObservableObject {
                 id: nextTransactionId + created.count, title: draft.title, amount: offsetAmount, kind: .income,
                 happenedAt: offset.happenedAt, note: draft.note.isEmpty ? "抵扣流水" : draft.note,
                 merchant: draft.merchant.isEmpty ? nil : draft.merchant,
-                paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod, source: draft.source, currency: "CNY",
+                paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod, source: offsetSourceMarker(sourceTransactionId, original: draft.source), currency: "CNY",
                 categoryId: offsetCategory.id, categoryName: resolvedCategoryName(for: offsetCategory.id),
                 bookId: resolvedBook?.id, bookName: bookName, bookIds: resolvedBooks.map(\.id), bookNames: resolvedBooks.map(\.name),
                 installmentGroupId: nil, installmentIndex: nil, installmentMonths: nil,
@@ -303,10 +331,13 @@ final class LedgerStore: ObservableObject {
         let selectedBook = resolvedBook
         let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
-        let resolvedSplitParticipants = bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
-        let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let anonymousBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
+        let resolvedSplitParticipants = anonymousBookSplit
+            ? bookParticipants
+            : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
+        let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
 
-        if selectedBook?.splitEnabled == true {
+        if selectedBook?.splitEnabled == true && !anonymousBookSplit {
             guard !resolvedSplitParticipants.isEmpty else {
                 errorMessage = "账本流水请至少选择 1 位分账成员"
                 return
@@ -337,14 +368,16 @@ final class LedgerStore: ObservableObject {
             installmentGroupId: existing.installmentGroupId,
             installmentIndex: existing.installmentIndex,
             installmentMonths: existing.installmentMonths,
+            paidByParticipantId: resolvedPayer?.id,
+            paidByParticipantName: resolvedPayer?.name,
+            splitParticipantIds: resolvedSplitParticipants.map(\.id),
+            splitParticipantNames: resolvedSplitParticipants.map(\.name),
             installmentOriginalTotal: existing.installmentOriginalTotal,
             originalAmount: Double(draft.originalAmount),
             discountAmount: Double(draft.discountAmount),
             premiumAmount: Double(draft.premiumAmount),
-            paidByParticipantId: resolvedPayer?.id,
-            paidByParticipantName: resolvedPayer?.name,
-            splitParticipantIds: resolvedSplitParticipants.map(\.id),
-            splitParticipantNames: resolvedSplitParticipants.map(\.name)
+            installmentStartMonth: existing.installmentStartMonth,
+            offsetSourceTransactionId: existing.offsetSourceTransactionId
         )
 
         transactions.sort { $0.happenedAt > $1.happenedAt }
@@ -380,7 +413,7 @@ final class LedgerStore: ObservableObject {
                 note: source.note?.isEmpty == false ? source.note : "抵扣流水",
                 merchant: source.merchant,
                 paymentMethod: source.paymentMethod,
-                source: source.source,
+                source: offsetSourceMarker(source.id, original: source.source),
                 currency: source.currency,
                 categoryId: category.id,
                 categoryName: resolvedCategoryName(for: category.id),
@@ -507,14 +540,16 @@ final class LedgerStore: ObservableObject {
         installmentGroupId: tx.installmentGroupId,
         installmentIndex: tx.installmentIndex,
         installmentMonths: tx.installmentMonths,
+        paidByParticipantId: tx.paidByParticipantId,
+        paidByParticipantName: tx.paidByParticipantName,
+        splitParticipantIds: tx.splitParticipantIds,
+        splitParticipantNames: tx.splitParticipantNames,
         installmentOriginalTotal: tx.installmentOriginalTotal,
         originalAmount: tx.originalAmount,
         discountAmount: tx.discountAmount,
         premiumAmount: tx.premiumAmount,
-        paidByParticipantId: tx.paidByParticipantId,
-        paidByParticipantName: tx.paidByParticipantName,
-        splitParticipantIds: tx.splitParticipantIds,
-        splitParticipantNames: tx.splitParticipantNames
+        installmentStartMonth: tx.installmentStartMonth,
+        offsetSourceTransactionId: tx.offsetSourceTransactionId
       )
     }
     refreshDerivedData()
@@ -673,9 +708,144 @@ final class LedgerStore: ObservableObject {
   }
 
   func deleteTransaction(_ transactionId: Int) async {
-    transactions.removeAll { $0.id == transactionId }
+    // A reimbursement/refund is a child of its source expense. Deleting the
+    // source must remove those generated records as well, including records
+    // loaded from older SwiftData stores that only have the source marker.
+    let linkedIDs = Set(transactions.filter { $0.linkedOffsetSourceID == transactionId }.map(\.id))
+    let idsToDelete = linkedIDs.union([transactionId])
+    transactions.removeAll { idsToDelete.contains($0.id) }
     refreshDerivedData()
     await persistAndMaybeSync(reason: "流水已删除")
+  }
+
+  /// Merges every installment in a group into the original transaction and
+  /// clears its installment metadata. This is intentionally an explicit
+  /// action from the edit screen; changing an existing amount never creates a
+  /// new installment group behind the user's back.
+  func cancelInstallment(for transactionId: Int) async {
+    guard let current = transactions.first(where: { $0.id == transactionId }),
+          let groupID = current.installmentGroupId else {
+      errorMessage = "这笔流水不是分期流水。"
+      return
+    }
+    let group = transactions.filter { $0.installmentGroupId == groupID }
+    guard group.count > 1 else {
+      errorMessage = "未找到可合并的分期记录。"
+      return
+    }
+    let representative = group.sorted { ($0.installmentIndex ?? 0) < ($1.installmentIndex ?? 0) }.first ?? current
+    let groupIDs = Set(group.map(\.id))
+    let total = group.reduce(0) { $0 + $1.amount }
+    let title = installmentBaseTitle(representative.title)
+    let merged = LedgerTransaction(
+      id: representative.id,
+      title: title,
+      amount: (total * 100).rounded() / 100,
+      kind: representative.kind,
+      happenedAt: group.map(\.happenedAt).min() ?? representative.happenedAt,
+      note: representative.note,
+      merchant: representative.merchant,
+      paymentMethod: representative.paymentMethod,
+      source: representative.source,
+      currency: representative.currency,
+      categoryId: representative.categoryId,
+      categoryName: representative.categoryName,
+      bookId: representative.bookId,
+      bookName: representative.bookName,
+      bookIds: representative.bookIds,
+      bookNames: representative.bookNames,
+      installmentGroupId: nil,
+      installmentIndex: nil,
+      installmentMonths: nil,
+      paidByParticipantId: representative.paidByParticipantId,
+      paidByParticipantName: representative.paidByParticipantName,
+      splitParticipantIds: representative.splitParticipantIds,
+      splitParticipantNames: representative.splitParticipantNames,
+      installmentOriginalTotal: nil,
+      originalAmount: representative.originalAmount,
+      discountAmount: representative.discountAmount,
+      premiumAmount: representative.premiumAmount,
+      installmentStartMonth: nil,
+      offsetSourceTransactionId: representative.offsetSourceTransactionId
+    )
+
+    var rebuilt = transactions.filter { !groupIDs.contains($0.id) }
+    // Keep refunds attached to the surviving representative. Refunds for a
+    // removed installment are moved to that representative instead of being
+    // orphaned.
+    for offset in rebuilt where groupIDs.contains(offset.linkedOffsetSourceID ?? -1) && offset.linkedOffsetSourceID != representative.id {
+      if let index = rebuilt.firstIndex(where: { $0.id == offset.id }) {
+        rebuilt[index] = rebuildTransaction(offset, bookId: offset.bookId, bookName: offset.bookName,
+          bookIds: offset.bookIds, bookNames: offset.bookNames,
+          source: offsetSourceMarker(representative.id, original: offset.source),
+          offsetSourceTransactionId: representative.id)
+      }
+    }
+    rebuilt.append(merged)
+    transactions = rebuilt.sorted { $0.happenedAt > $1.happenedAt }
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "已取消分期并合并流水")
+  }
+
+  /// Creates one payment at the current time for all not-yet-due installments
+  /// and removes those future installment rows so they cannot be counted twice.
+  func payOffInstallment(for transactionId: Int) async {
+    guard let current = transactions.first(where: { $0.id == transactionId }),
+          let groupID = current.installmentGroupId else {
+      errorMessage = "这笔流水不是分期流水。"
+      return
+    }
+    let marker = "installment_payoff:\(groupID)"
+    guard !transactions.contains(where: { $0.source == marker }) else {
+      errorMessage = "这笔分期已经立即还清。"
+      return
+    }
+    let now = Date()
+    let future = transactions.filter { $0.installmentGroupId == groupID && $0.happenedAt > now }
+    let remaining = future.reduce(0) { $0 + $1.amount }
+    guard remaining > 0 else {
+      errorMessage = "没有尚未到期的分期可立即还清。"
+      return
+    }
+    let removeIDs = Set(future.map(\.id))
+    let linkedOffsetIDs = Set(transactions.filter { removeIDs.contains($0.linkedOffsetSourceID ?? -1) }.map(\.id))
+    let payoff = LedgerTransaction(
+      id: nextTransactionId,
+      title: "\(installmentBaseTitle(current.title))（立即还清）",
+      amount: (remaining * 100).rounded() / 100,
+      kind: current.kind,
+      happenedAt: now,
+      note: [current.note, "分期立即还清"].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+      merchant: current.merchant,
+      paymentMethod: current.paymentMethod,
+      source: marker,
+      currency: current.currency,
+      categoryId: current.categoryId,
+      categoryName: current.categoryName,
+      bookId: current.bookId,
+      bookName: current.bookName,
+      bookIds: current.bookIds,
+      bookNames: current.bookNames,
+      installmentGroupId: nil,
+      installmentIndex: nil,
+      installmentMonths: nil,
+      paidByParticipantId: current.paidByParticipantId,
+      paidByParticipantName: current.paidByParticipantName,
+      splitParticipantIds: current.splitParticipantIds,
+      splitParticipantNames: current.splitParticipantNames,
+      installmentOriginalTotal: nil,
+      originalAmount: current.originalAmount,
+      discountAmount: current.discountAmount,
+      premiumAmount: current.premiumAmount,
+      installmentStartMonth: nil,
+      offsetSourceTransactionId: nil
+    )
+    nextTransactionId += 1
+    transactions.removeAll { removeIDs.contains($0.id) || linkedOffsetIDs.contains($0.id) }
+    transactions.append(payoff)
+    transactions.sort { $0.happenedAt > $1.happenedAt }
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "分期已立即还清")
   }
 
   func createBudget(_ draft: BudgetDraft) async {
@@ -1308,8 +1478,8 @@ final class LedgerStore: ObservableObject {
         return false
     }
 
-    private func rebuildTransaction(_ tx: LedgerTransaction, bookId: Int?, bookName: String?, bookIds: [Int], bookNames:
-[String], categoryId: Int? = nil, categoryName: String? = nil, replacingCategory: Bool = false) -> LedgerTransaction {
+  private func rebuildTransaction(_ tx: LedgerTransaction, bookId: Int?, bookName: String?, bookIds: [Int], bookNames:
+  [String], categoryId: Int? = nil, categoryName: String? = nil, replacingCategory: Bool = false, source: String? = nil, offsetSourceTransactionId: Int? = nil) -> LedgerTransaction {
         LedgerTransaction(
             id: tx.id,
             title: tx.title,
@@ -1319,7 +1489,7 @@ final class LedgerStore: ObservableObject {
             note: tx.note,
             merchant: tx.merchant,
             paymentMethod: tx.paymentMethod,
-            source: tx.source,
+            source: source ?? tx.source,
             currency: tx.currency,
             categoryId: replacingCategory ? categoryId : tx.categoryId,
             categoryName: replacingCategory ? categoryName : tx.categoryName,
@@ -1330,15 +1500,27 @@ final class LedgerStore: ObservableObject {
             installmentGroupId: tx.installmentGroupId,
             installmentIndex: tx.installmentIndex,
             installmentMonths: tx.installmentMonths,
+            paidByParticipantId: tx.paidByParticipantId,
+            paidByParticipantName: tx.paidByParticipantName,
+            splitParticipantIds: tx.splitParticipantIds,
+            splitParticipantNames: tx.splitParticipantNames,
             installmentOriginalTotal: tx.installmentOriginalTotal,
             originalAmount: tx.originalAmount,
             discountAmount: tx.discountAmount,
             premiumAmount: tx.premiumAmount,
-            paidByParticipantId: tx.paidByParticipantId,
-            paidByParticipantName: tx.paidByParticipantName,
-            splitParticipantIds: tx.splitParticipantIds,
-            splitParticipantNames: tx.splitParticipantNames
+            installmentStartMonth: tx.installmentStartMonth,
+            offsetSourceTransactionId: offsetSourceTransactionId ?? tx.offsetSourceTransactionId
         )
+    }
+
+    private func offsetSourceMarker(_ id: Int?, original: String) -> String {
+        guard let id else { return original }
+        return "offset:\(id)|\(original)"
+    }
+
+    private func installmentBaseTitle(_ title: String) -> String {
+        guard let range = title.range(of: " (分期 ") else { return title }
+        return String(title[..<range.lowerBound])
     }
 
     private func currentSnapshot(markUpdatedAt: Bool) -> PersistedLedgerSnapshot {

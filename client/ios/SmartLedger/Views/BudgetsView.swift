@@ -13,6 +13,7 @@ struct BudgetView: View {
       .padding()
     }
     .navigationTitle("预算")
+    .dismissKeyboardWhenTappedOutside()
 
 .toolbar {
      ToolbarItem(placement: .topBarTrailing) {
@@ -223,6 +224,7 @@ private struct CreateBudgetView: View {
        }
      }
      .navigationTitle("新建预算")
+     .dismissKeyboardWhenTappedOutside()
      .toolbar {
        ToolbarItem(placement: .topBarLeading) {
          Button("取消") { dismiss() }

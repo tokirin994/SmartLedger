@@ -229,6 +229,7 @@ struct CategoryEditorView: View {
                 }
             }
             .navigationTitle(title)
+            .dismissKeyboardWhenTappedOutside()
             .onAppear {
                 if let preselectedFlowType {
                     flowType = preselectedFlowType

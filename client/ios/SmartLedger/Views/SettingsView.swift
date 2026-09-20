@@ -100,6 +100,7 @@ struct SettingsView: View {
                 .disabled(store.isLoading || store.syncState == .syncing)
             }
         }
+        .dismissKeyboardWhenTappedOutside()
         .navigationTitle("设置")
         .task { cloudEnabled = store.cloudSyncEnabled }
         .alert("模拟数据", isPresented: Binding(get: { demoMessage != nil }, set: { if !$0 { demoMessage = nil } })) {

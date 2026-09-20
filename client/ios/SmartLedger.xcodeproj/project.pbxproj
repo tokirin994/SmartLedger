@@ -14,6 +14,7 @@
 		232194CD5EE931DB93B947C6 /* SwiftDataSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA9E063652BEB6567595DB6E /* SwiftDataSnapshotStore.swift */; };
 		23BD8ED7CCF6CE62242EC223 /* MetricCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CFBE18B8AA7AE021828FC2A /* MetricCard.swift */; };
 		39EBBE10605A3629A38BC716 /* OCRImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76D029D6EB3FF9093B9ABC00 /* OCRImportService.swift */; };
+		3C1F4B0D6A6D4C2F9F4B91A1 /* BillFileImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0B6DB0D8C44E3AA3A56E2F /* BillFileImportService.swift */; };
 		4881081FFDFDBD8A240D5149 /* ImportReceiptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F72A80962E8E77687A7132BC /* ImportReceiptView.swift */; };
 		4A308A685ED4C5093CAA9B6C /* LedgerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 987FAF07B781ABDE78AC7BD2 /* LedgerStore.swift */; };
 		4D4E460C5920DEEDCCEE731E /* SectionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15F61F00F8BCEE8AD743541E /* SectionCard.swift */; };
@@ -52,6 +53,7 @@
 		16AFC1F0A16E7017481A6E1D /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		1CFBE18B8AA7AE021828FC2A /* MetricCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricCard.swift; sourceTree = "<group>"; };
 		297B3DDDB482E6C28B8721F1 /* CloudSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSyncService.swift; sourceTree = "<group>"; };
+		4A0B6DB0D8C44E3AA3A56E2F /* BillFileImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BillFileImportService.swift; sourceTree = "<group>"; };
 		58B3F39BB256B4D8274308DB /* CreateTransactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateTransactionView.swift; sourceTree = "<group>"; };
 		635F8704F8873002AE477F58 /* LocalAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAnalytics.swift; sourceTree = "<group>"; };
 		67023A7DB755D56C70E061D3 /* SmartLedgerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartLedgerApp.swift; sourceTree = "<group>"; };
@@ -167,6 +169,7 @@
 		9019B57ABA52D9E5D5943F84 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				4A0B6DB0D8C44E3AA3A56E2F /* BillFileImportService.swift */,
 				297B3DDDB482E6C28B8721F1 /* CloudSyncService.swift */,
 				76D029D6EB3FF9093B9ABC00 /* OCRImportService.swift */,
 				BAA14D6150A0A3EF23C5B4B8 /* ReceiptParser.swift */,
@@ -292,6 +295,7 @@
 				F5B4E91B22149772AEDAE0F7 /* LocalSnapshotStore.swift in Sources */,
 				23BD8ED7CCF6CE62242EC223 /* MetricCard.swift in Sources */,
 				39EBBE10605A3629A38BC716 /* OCRImportService.swift in Sources */,
+				3C1F4B0D6A6D4C2F9F4B91A1 /* BillFileImportService.swift in Sources */,
 				6846FE77E8BB83F34C015497 /* ReceiptParser.swift in Sources */,
 				4D4E460C5920DEEDCCEE731E /* SectionCard.swift in Sources */,
 				EC1D3DB41A9BCEC47FD0A581 /* SettingsView.swift in Sources */,

@@ -276,6 +276,18 @@ extension LedgerTransaction {
         guard participates else { return 0 }
         return amount / Double(splitParticipantIds.count)
     }
+
+    /// SwiftData versions created before the explicit offset relation existed
+    /// still persist the relation in the source marker. Keep both formats
+    /// readable so deleting or editing a source transaction always finds its
+    /// generated reimbursement records.
+    var linkedOffsetSourceID: Int? {
+        if let offsetSourceTransactionId { return offsetSourceTransactionId }
+        guard source.hasPrefix("offset:") else { return nil }
+        let payload = source.dropFirst("offset:".count)
+        let idPart = payload.split(separator: "|", maxSplits: 1).first.map(String.init) ?? String(payload)
+        return Int(idPart)
+    }
 }
 
 struct TrendPoint: Codable, Identifiable, Sendable {
@@ -532,7 +544,7 @@ extension OCRLineItem {
 }
 
 extension OCRImportResult {
-    init(amount: Double?, kind: FlowType?, merchant: String?, paymentMethod: String?, title: String?, happenedAt: Date?, categoryKeyword: String?, categoryPath: [String]?, details: [OCRLineItem]?, confidence: Double?, rawLines: [String]?, originalAmount: Double?, discountAmount: Double?) {
+    init(amount: Double?, kind: FlowType?, merchant: String?, paymentMethod: String?, title: String?, happenedAt: Date?, categoryKeyword: String?, categoryPath: [String]?, details: [OCRLineItem]?, confidence: Double?, rawLines: [String]?, originalAmount: Double?, discountAmount: Double?, premiumAmount: Double? = nil) {
         self.amount = amount
         self.kind = kind
         self.merchant = merchant
@@ -545,6 +557,7 @@ extension OCRImportResult {
         self.rawLines = rawLines
         self.originalAmount = originalAmount
         self.discountAmount = discountAmount
+        self.premiumAmount = premiumAmount
         self.confidence = confidence
     }
 }
@@ -565,6 +578,7 @@ struct OCRImportResult: Codable, Identifiable, Sendable {
     var rawLines: [String]?
     var originalAmount: Double?
     var discountAmount: Double?
+    var premiumAmount: Double?
     var confidence: Double?
 
     enum CodingKeys: String, CodingKey {
@@ -576,6 +590,7 @@ struct OCRImportResult: Codable, Identifiable, Sendable {
         case rawLines = "raw_lines"
         case originalAmount = "original_amount"
         case discountAmount = "discount_amount"
+        case premiumAmount = "premium_amount"
     }
 }
 
@@ -650,7 +665,7 @@ struct TransactionDraft {
         self.source = source
         self.originalAmount = parsed.originalAmount.map { String(format: "%.2f", $0) } ?? ""
         self.discountAmount = parsed.discountAmount.map { String(format: "%.2f", $0) } ?? ""
-        self.premiumAmount = ""
+        self.premiumAmount = parsed.premiumAmount.map { String(format: "%.2f", $0) } ?? ""
         self.installmentEnabled = false
         self.installmentMonths = 1
         self.installmentStartMonth = .now

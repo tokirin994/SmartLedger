@@ -82,7 +82,7 @@ private struct RootTabView: View {
             selection = .imports
             showOCRDiscardConfirmation = true
         }
-        .alert("丢弃当前识别？", isPresented: $showOCRDiscardConfirmation) {
+        .alert("丢弃当前导入？", isPresented: $showOCRDiscardConfirmation) {
             Button("继续切换并丢弃", role: .destructive) {
                 store.clearOCRImport()
                 NotificationCenter.default.post(name: .smartLedgerDiscardOCRImport, object: nil)
@@ -93,7 +93,7 @@ private struct RootTabView: View {
             }
             Button("留在识图页", role: .cancel) { pendingTabAfterOCRDiscard = nil }
         } message: {
-            Text("当前图片和待确认流水尚未保存。继续切换会丢弃这些识别内容。")
+            Text("当前图片/账单文件和待确认流水尚未保存。继续切换会丢弃这些导入内容。")
         }
     }
 
