@@ -47,12 +47,8 @@ struct CreateTransactionView: View {
         selectedBook?.splitEnabled == true
     }
 
-    private var selectedBookUsesAnonymousSplit: Bool {
-        selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
-    }
-
     private var selectedBookRequiresNamedSplit: Bool {
-        selectedBookSupportsSplit && !selectedBookUsesAnonymousSplit
+        selectedBookSupportsSplit
     }
 
     /// A transaction that is not attached to a book can still be split. These
@@ -74,6 +70,36 @@ struct CreateTransactionView: View {
         }
         draft.splitParticipantIds = ["我"] + (2...count).map { "分账成员\($0)" }
         draft.paidByParticipantId = nil
+    }
+
+    @ViewBuilder
+    private var bookSplitSection: some View {
+        if let selectedBook, selectedBookSupportsSplit {
+            Section("多人分账 - \(selectedBook.name)") {
+                Picker("付款人", selection: Binding(
+                    get: { draft.paidByParticipantId },
+                    set: { draft.paidByParticipantId = $0 }
+                )) {
+                    Text("请选择付款人").tag(String?.none)
+                    ForEach(splitParticipants) { participant in
+                        Text(participant.name).tag(Optional(participant.id))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("参与分账成员")
+                        .font(.subheadline.weight(.medium))
+                    ForEach(splitParticipants) { participant in
+                        Toggle(
+                            participant.name,
+                            isOn: Binding(
+                                get: { draft.splitParticipantIds.contains(participant.id) },
+                                set: { setParticipant(participant.id, enabled: $0) }
+                            )
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private var editingInstallment: Bool {
@@ -216,41 +242,7 @@ struct CreateTransactionView: View {
                         .padding(.vertical, 4)
                     }
 
-                    if let selectedBook, selectedBookSupportsSplit {
-                        Section("多人分账 - \(selectedBook.name)") {
-                            if selectedBookUsesAnonymousSplit {
-                                Label("自动归集账本按 \(splitParticipants.count) 人均分，不记录具体付款人", systemImage: "person.3.fill")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Picker("付款人", selection: Binding(
-                                get: { draft.paidByParticipantId },
-                                set: { draft.paidByParticipantId = $0 }
-                                )) {
-                                    Text("请选择付款人").tag(String?.none)
-                                    ForEach(splitParticipants) { participant in
-                                        let participantId = participant.id
-                                        Text(participant.name).tag(Optional(participantId))
-                                    }
-                                }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("参与分账成员")
-                                    .font(.subheadline.weight(.medium))
-
-                                ForEach(splitParticipants) { participant in
-                                    Toggle(
-                                        participant.name,
-                                        isOn: Binding(
-                                            get: { draft.splitParticipantIds.contains(participant.id) },
-                        set: { setParticipant(participant.id, enabled: $0) }
-                                        )
-                                    )
-                                }
-                            }
-                            }
-                        }
-                    }
+                    bookSplitSection
 
                     Section("分期") {
                         if editingInstallment {
@@ -340,7 +332,13 @@ struct CreateTransactionView: View {
         let validIds = Set(participants.map(\.id))
         draft.splitParticipantIds = draft.splitParticipantIds.filter { validIds.contains($0) }
         if draft.splitParticipantIds.isEmpty {
-            draft.splitParticipantIds = participants.map(\.id)
+            if book.autoCollectEnabled {
+                let own = participants.first(where: { $0.name == "我" }) ?? participants.first
+                draft.splitParticipantIds = own.map { [$0.id] } ?? []
+                draft.paidByParticipantId = own?.id
+            } else {
+                draft.splitParticipantIds = participants.map(\.id)
+            }
         }
     }
     .onChange(of: draft.bookIds) { _, ids in
@@ -540,6 +538,12 @@ private func saveDraftAndDismiss() async {
 }
 
 private func performSaveDraft(normalizeOffsets: Bool) async {
+    if let selectedBook, selectedBook.autoCollectEnabled, selectedBook.splitEnabled,
+       draft.splitParticipantIds.isEmpty {
+        let own = selectedBook.participants.first(where: { $0.name == "我" }) ?? selectedBook.participants.first
+        draft.splitParticipantIds = own.map { [$0.id] } ?? []
+        draft.paidByParticipantId = own?.id
+    }
     if normalizeOffsets, totalOffsetRatio > 0 {
         let availableRatio = max(100 - existingOffsetRatio, 0)
         let scale = availableRatio / totalOffsetRatio
@@ -1126,18 +1130,18 @@ private var addableChannel: String? {
     guard !settings.paymentChannels.contains(where: { isSameChannel($0, normalized) }) else { return nil }
     return normalized
     }
-    
+
     private var normalizedQuery: String? {
         let trimmed = query
             .replacingOccurrences(of: "\u{3000}", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
-    
+
     private func isSelected(_ channel: String) -> Bool {
         isSameChannel(channel, selection)
     }
-    
+
     private func isSameChannel(_ lhs: String, _ rhs: String) -> Bool {
         lhs.trimmingCharacters(in: .whitespacesAndNewlines)
             .caseInsensitiveCompare(rhs.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
@@ -1154,9 +1158,9 @@ struct HierarchicalCategoryPicker: View {
     let onCreateCategory: ((Int?) -> Void)?
     /// 叶子节点会直接完成选择；有子节点时才进入下一级。
     var allowsDescendantSelection: Bool = true
-    
+
     @State private var isPresenting = false
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button {
@@ -1199,14 +1203,14 @@ struct HierarchicalCategoryPicker: View {
             }
         }
     }
-    
+
     private var selectedDisplayName: String {
         guard let selectedCategoryId else {
             return placeholder
         }
         return displayName(for: selectedCategoryId, in: categories) ?? placeholder
     }
-    
+
     private func displayName(for id: Int, in categories: [LedgerCategory], path: [String] = []) -> String? {
         for category in categories {
             let currentPath = path + [category.name]

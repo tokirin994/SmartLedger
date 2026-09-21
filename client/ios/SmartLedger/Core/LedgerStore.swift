@@ -211,11 +211,15 @@ final class LedgerStore: ObservableObject {
         let bookName = selectedBook?.name
         let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
-        let anonymousBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
-        let resolvedSplitParticipants = anonymousBookSplit
-            ? bookParticipants
-            : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
-        let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let autoCollectBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
+        let defaultOwnParticipant = autoCollectBookSplit
+            && draft.splitParticipantIds.isEmpty
+            ? (bookParticipants.first(where: { $0.name == "我" }) ?? bookParticipants.first)
+            : nil
+        let resolvedSplitParticipants = defaultOwnParticipant.map { [$0] }
+            ?? bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
+        let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+            ?? defaultOwnParticipant
         let unboundSplit = selectedBook == nil && draft.splitParticipantIds.count > 1
         let resolvedSplitParticipantIDs = selectedBook == nil
             ? (unboundSplit ? draft.splitParticipantIds : [])
@@ -224,7 +228,7 @@ final class LedgerStore: ObservableObject {
             ? (unboundSplit ? draft.splitParticipantIds : [])
             : resolvedSplitParticipants.map(\.name)
 
-        if selectedBook?.splitEnabled == true && !anonymousBookSplit {
+        if selectedBook?.splitEnabled == true {
             guard !resolvedSplitParticipants.isEmpty else {
                 errorMessage = "账本流水请至少选择 1 位分账成员"
                 return
@@ -338,11 +342,15 @@ final class LedgerStore: ObservableObject {
         let selectedBook = resolvedBook
         let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
-        let anonymousBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
-        let resolvedSplitParticipants = anonymousBookSplit
-            ? bookParticipants
-            : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
-        let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let autoCollectBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
+        let defaultOwnParticipant = autoCollectBookSplit
+            && draft.splitParticipantIds.isEmpty
+            ? (bookParticipants.first(where: { $0.name == "我" }) ?? bookParticipants.first)
+            : nil
+        let resolvedSplitParticipants = defaultOwnParticipant.map { [$0] }
+            ?? bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
+        let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+            ?? defaultOwnParticipant
         let unboundSplit = selectedBook == nil && draft.splitParticipantIds.count > 1
         let resolvedSplitParticipantIDs = selectedBook == nil
             ? (unboundSplit ? draft.splitParticipantIds : [])
@@ -351,7 +359,7 @@ final class LedgerStore: ObservableObject {
             ? (unboundSplit ? draft.splitParticipantIds : [])
             : resolvedSplitParticipants.map(\.name)
 
-        if selectedBook?.splitEnabled == true && !anonymousBookSplit {
+        if selectedBook?.splitEnabled == true {
             guard !resolvedSplitParticipants.isEmpty else {
                 errorMessage = "账本流水请至少选择 1 位分账成员"
                 return
@@ -689,8 +697,12 @@ final class LedgerStore: ObservableObject {
         names.append(book.name)
         let primaryId = ids.first
         let primaryName = names.first
+        let own = book.splitEnabled && transactions[index].splitParticipantIds.isEmpty
+          ? (book.participants.first(where: { $0.name == "我" }) ?? book.participants.first)
+          : nil
         transactions[index] = rebuildTransaction(transactions[index], bookId: primaryId, bookName: primaryName,
-          bookIds: ids, bookNames: names)
+          bookIds: ids, bookNames: names,
+          defaultSplitParticipantId: own?.id, defaultSplitParticipantName: own?.name)
       }
     }
     refreshDerivedData()
@@ -730,7 +742,11 @@ final class LedgerStore: ObservableObject {
         var names = transaction.bookNames
         ids.append(bookId)
         names.append(book.name)
-        transactions[index] = rebuildTransaction(transaction, bookId: ids.first, bookName: names.first, bookIds: ids, bookNames: names)
+        let own = book.splitEnabled && transaction.splitParticipantIds.isEmpty
+          ? (book.participants.first(where: { $0.name == "我" }) ?? book.participants.first)
+          : nil
+        transactions[index] = rebuildTransaction(transaction, bookId: ids.first, bookName: names.first, bookIds: ids, bookNames: names,
+          defaultSplitParticipantId: own?.id, defaultSplitParticipantName: own?.name)
       }
     }
 
@@ -1559,8 +1575,12 @@ final class LedgerStore: ObservableObject {
     }
 
   private func rebuildTransaction(_ tx: LedgerTransaction, bookId: Int?, bookName: String?, bookIds: [Int], bookNames:
-  [String], categoryId: Int? = nil, categoryName: String? = nil, replacingCategory: Bool = false, source: String? = nil, offsetSourceTransactionId: Int? = nil) -> LedgerTransaction {
-        LedgerTransaction(
+  [String], categoryId: Int? = nil, categoryName: String? = nil, replacingCategory: Bool = false, source: String? = nil, offsetSourceTransactionId: Int? = nil, defaultSplitParticipantId: String? = nil, defaultSplitParticipantName: String? = nil) -> LedgerTransaction {
+        let splitIDs = defaultSplitParticipantId.map { [$0] } ?? tx.splitParticipantIds
+        let splitNames = defaultSplitParticipantName.map { [$0] } ?? tx.splitParticipantNames
+        let paidByID = defaultSplitParticipantId ?? tx.paidByParticipantId
+        let paidByName = defaultSplitParticipantName ?? tx.paidByParticipantName
+        return LedgerTransaction(
             id: tx.id,
             title: tx.title,
             amount: tx.amount,
@@ -1580,10 +1600,10 @@ final class LedgerStore: ObservableObject {
             installmentGroupId: tx.installmentGroupId,
             installmentIndex: tx.installmentIndex,
             installmentMonths: tx.installmentMonths,
-            paidByParticipantId: tx.paidByParticipantId,
-            paidByParticipantName: tx.paidByParticipantName,
-            splitParticipantIds: tx.splitParticipantIds,
-            splitParticipantNames: tx.splitParticipantNames,
+            paidByParticipantId: paidByID,
+            paidByParticipantName: paidByName,
+            splitParticipantIds: splitIDs,
+            splitParticipantNames: splitNames,
             installmentOriginalTotal: tx.installmentOriginalTotal,
             originalAmount: tx.originalAmount,
             discountAmount: tx.discountAmount,

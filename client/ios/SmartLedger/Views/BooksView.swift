@@ -188,11 +188,11 @@ private struct BookDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("最终分账").font(.title3.bold())
             if current.autoCollectEnabled {
-                Label("归集流水按 \(max(current.participants.count, 1)) 人均分，不记录具体付款人", systemImage: "person.3.fill")
+                Label("归集流水无分账信息时默认由我承担；已有分账信息按流水设置计算", systemImage: "person.3.fill")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(current.participants) { member in
+            }
+            ForEach(current.participants) { member in
                     let paid = splitTransactions.filter { $0.paidByParticipantId == member.id }.reduce(0) { $0 + $1.amount }
                     let owed = splitTransactions.filter { $0.splitParticipantIds.contains(member.id) }.reduce(0) { $0 + $1.amount / Double(max($1.splitParticipantIds.count, 1)) }
                     let net = paid - owed
@@ -208,7 +208,6 @@ private struct BookDetailView: View {
                             metric("应承担", owed.cnyText, .purple)
                         }
                     }
-                }
             }
         }
         .padding()
