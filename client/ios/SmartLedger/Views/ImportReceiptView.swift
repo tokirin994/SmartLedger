@@ -133,10 +133,14 @@ struct ImportReceiptView: View {
 }
 .fileImporter(
     isPresented: $showFileImporter,
-    allowedContentTypes: [.commaSeparatedText, .plainText, .spreadsheet, .data],
+    // Let the parser validate the extension/header so generic exports are not
+    // silently rejected by the system document picker.
+    allowedContentTypes: [.item],
     allowsMultipleSelection: true
 ) { result in
-    Task { await importBillFiles(result) }
+    Task { @MainActor in
+        await importBillFiles(result)
+    }
 }
 .onReceive(NotificationCenter.default.publisher(for: .smartLedgerDiscardOCRImport)) { _ in
     clearImportState()
@@ -466,6 +470,11 @@ private func loadImages(from items: [PhotosPickerItem]) async {
 private func importBillFiles(_ result: Result<[URL], Error>) async {
     do {
         let urls = try result.get()
+        guard !urls.isEmpty else {
+            isRecognizing = false
+            importSaveError = "没有选择账单文件，请重新选择后点击‘打开’。"
+            return
+        }
         let token = UUID()
         activeImportToken = token
         isRecognizing = true
@@ -475,22 +484,33 @@ private func importBillFiles(_ result: Result<[URL], Error>) async {
         selectedImages.removeAll()
         recognizedText = ""
         pendingImportSource = "file"
-        var items: [OCRImportResult] = []
-        var names: [String] = []
-        var failures: [String] = []
-        let parser = BillFileImportService()
-        for url in urls {
-            guard activeImportToken == token else { return }
-            let accessed = url.startAccessingSecurityScopedResource()
-            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-            names.append(url.lastPathComponent)
-            do {
-                let parsed = try parser.parse(url: url)
-                items.append(contentsOf: parsed)
-            } catch {
-                failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+        // Keep security-scoped access alive while parsing, but move the
+        // potentially expensive CSV/XLSX work off the UI thread.  Otherwise
+        // tapping “打开” can look like it did nothing for a large export.
+        let scopedURLs = urls.map { url in
+            (url, url.startAccessingSecurityScopedResource())
+        }
+        defer {
+            for (url, accessed) in scopedURLs where accessed {
+                url.stopAccessingSecurityScopedResource()
             }
         }
+        let parsedFiles = await Task.detached(priority: .userInitiated) {
+            let parser = BillFileImportService()
+            var items: [OCRImportResult] = []
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    items.append(contentsOf: try parser.parse(url: url))
+                } catch {
+                    failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+                }
+            }
+            return (items, failures)
+        }.value
+        let items = parsedFiles.0
+        let failures = parsedFiles.1
+        let names = urls.map(\.lastPathComponent)
         guard activeImportToken == token else { return }
         importedFileNames = names
         await store.setPendingImportItems(items)

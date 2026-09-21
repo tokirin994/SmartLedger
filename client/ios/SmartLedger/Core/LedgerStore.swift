@@ -348,6 +348,70 @@ final class LedgerStore: ObservableObject {
             }
         }
 
+        let convertingToInstallments = existing.installmentGroupId == nil
+            && draft.installmentEnabled
+            && draft.installmentMonths > 1
+        if convertingToInstallments {
+            let months = max(draft.installmentMonths, 2)
+            let groupId = UUID().uuidString
+            let baseDate = draft.installmentStartMonth
+            let eachAmount = (amount / Double(months) * 100).rounded() / 100
+            var accumulated = 0.0
+            var installmentRows: [LedgerTransaction] = []
+
+            for index in 0..<months {
+                let installmentAmount: Double
+                if index == months - 1 {
+                    installmentAmount = ((amount - accumulated) * 100).rounded() / 100
+                } else {
+                    installmentAmount = eachAmount
+                }
+                accumulated += installmentAmount
+                let date = calendar.date(byAdding: .month, value: index, to: baseDate) ?? baseDate
+                let transactionID = index == 0 ? existing.id : nextTransactionId + index - 1
+                installmentRows.append(LedgerTransaction(
+                    id: transactionID,
+                    title: "\(draft.title) (分期 \(index + 1)/\(months))",
+                    amount: installmentAmount,
+                    kind: draft.kind,
+                    happenedAt: date,
+                    note: draft.note.isEmpty ? nil : draft.note,
+                    merchant: draft.merchant.isEmpty ? nil : draft.merchant,
+                    paymentMethod: draft.paymentMethod.isEmpty ? nil : draft.paymentMethod,
+                    source: draft.source,
+                    currency: existing.currency,
+                    categoryId: draft.categoryId,
+                    categoryName: categoryName,
+                    bookId: resolvedBook?.id,
+                    bookName: resolvedBook?.name,
+                    bookIds: resolvedBooks.map(\.id),
+                    bookNames: resolvedBooks.map(\.name),
+                    installmentGroupId: groupId,
+                    installmentIndex: index + 1,
+                    installmentMonths: months,
+                    paidByParticipantId: resolvedPayer?.id,
+                    paidByParticipantName: resolvedPayer?.name,
+                    splitParticipantIds: resolvedSplitParticipants.map(\.id),
+                    splitParticipantNames: resolvedSplitParticipants.map(\.name),
+                    installmentOriginalTotal: amount,
+                    originalAmount: Double(draft.originalAmount),
+                    discountAmount: Double(draft.discountAmount),
+                    premiumAmount: Double(draft.premiumAmount),
+                    installmentStartMonth: baseDate,
+                    offsetSourceTransactionId: existing.offsetSourceTransactionId
+                ))
+            }
+
+            transactions.removeAll { $0.id == existing.id }
+            transactions.append(contentsOf: installmentRows)
+            nextTransactionId += max(months - 1, 0)
+            synchronizeLinkedOffsets(sourceID: existing.id, with: installmentRows[0])
+            transactions.sort { $0.happenedAt > $1.happenedAt }
+            refreshDerivedData()
+            await persistAndMaybeSync(reason: "流水已拆分为分期")
+            return
+        }
+
         transactions[existingIndex] = LedgerTransaction(
             id: existing.id,
             title: draft.title,
@@ -379,6 +443,8 @@ final class LedgerStore: ObservableObject {
             installmentStartMonth: existing.installmentStartMonth,
             offsetSourceTransactionId: existing.offsetSourceTransactionId
         )
+
+        synchronizeLinkedOffsets(sourceID: existing.id, with: transactions[existingIndex])
 
         transactions.sort { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
@@ -1516,6 +1582,45 @@ final class LedgerStore: ObservableObject {
     private func offsetSourceMarker(_ id: Int?, original: String) -> String {
         guard let id else { return original }
         return "offset:\(id)|\(original)"
+    }
+
+    /// Reimbursement/refund records keep their own income category, but all
+    /// descriptive fields follow the source expense so edits stay consistent.
+    private func synchronizeLinkedOffsets(sourceID: Int, with source: LedgerTransaction) {
+        transactions = transactions.map { offset in
+            guard offset.kind == .income, offset.linkedOffsetSourceID == sourceID else { return offset }
+            return LedgerTransaction(
+                id: offset.id,
+                title: source.title,
+                amount: offset.amount,
+                kind: .income,
+                happenedAt: offset.happenedAt,
+                note: source.note?.isEmpty == false ? source.note : "抵扣流水",
+                merchant: source.merchant,
+                paymentMethod: source.paymentMethod,
+                source: offsetSourceMarker(source.id, original: source.source),
+                currency: offset.currency,
+                categoryId: offset.categoryId,
+                categoryName: offset.categoryName,
+                bookId: source.bookId,
+                bookName: source.bookName,
+                bookIds: source.bookIds,
+                bookNames: source.bookNames,
+                installmentGroupId: nil,
+                installmentIndex: nil,
+                installmentMonths: nil,
+                paidByParticipantId: source.paidByParticipantId,
+                paidByParticipantName: source.paidByParticipantName,
+                splitParticipantIds: source.splitParticipantIds,
+                splitParticipantNames: source.splitParticipantNames,
+                installmentOriginalTotal: nil,
+                originalAmount: nil,
+                discountAmount: nil,
+                premiumAmount: nil,
+                installmentStartMonth: nil,
+                offsetSourceTransactionId: source.id
+            )
+        }
     }
 
     private func installmentBaseTitle(_ title: String) -> String {

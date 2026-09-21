@@ -568,6 +568,8 @@ private struct QuickCategoryAssignSheet: View {
                                     .foregroundStyle(.blue)
                             }
                         }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }

@@ -355,6 +355,8 @@ private struct CategoryListRow: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(categoryBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .onTapGesture { showEditSheet = true }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button { showEditSheet = true } label: { Label("修改", systemImage: "pencil") }
                     .tint(.blue)

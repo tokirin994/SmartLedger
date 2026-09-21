@@ -117,6 +117,7 @@ struct CreateTransactionView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -215,15 +216,14 @@ struct CreateTransactionView: View {
                                 .foregroundStyle(.orange)
                         } else {
                             Toggle("启用分期", isOn: $draft.installmentEnabled)
-                                .disabled(editingTransaction != nil)
-                            if editingTransaction != nil {
-                                Text("已有流水不能重新开启分期；如需分期请新增一笔流水。")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if draft.installmentEnabled && editingTransaction == nil {
-                                Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 1...36)
+                            if draft.installmentEnabled {
+                                Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 2...36)
                                 DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
+                                if editingTransaction != nil {
+                                    Text("保存后会把这笔流水拆分为多笔分期流水。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -738,6 +738,7 @@ private struct CategoryRootPickerSheet: View {
                                 .foregroundStyle(.blue)
                         }
                     }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -809,6 +810,8 @@ private struct CategoryRootPickerSheet: View {
                     .foregroundStyle(.blue)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -873,6 +876,8 @@ private struct ExpandableCategorySelectionSheet: View {
                     .foregroundStyle(.blue)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -922,6 +927,8 @@ private struct ExpandableCategorySelectionRow: View {
                     .foregroundStyle(.blue)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1120,6 +1127,7 @@ struct HierarchicalCategoryPicker: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.tertiary)
                 }
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1193,6 +1201,7 @@ private struct CategoryLevelPickerView: View {
                                     .foregroundStyle(.blue)
                             }
                         }
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .foregroundStyle(.primary)
@@ -1278,6 +1287,7 @@ private struct CategoryLevelPickerView: View {
                     .foregroundStyle(.blue)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
@@ -1305,6 +1315,7 @@ private struct CategoryNodeSelectionView: View {
                                 .foregroundStyle(.blue)
                         }
                     }
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .foregroundStyle(.primary)
@@ -1386,6 +1397,7 @@ private struct CategoryNodeSelectionView: View {
                     .foregroundStyle(.blue)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
         .contentShape(Rectangle())
     }
 }

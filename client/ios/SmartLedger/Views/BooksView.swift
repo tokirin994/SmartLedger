@@ -729,6 +729,8 @@ private struct BookAutoCollectCategoryPicker: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue)
                 }
             }
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -744,6 +746,8 @@ private struct BookAutoCollectCategoryPicker: View {
             Spacer()
             if selectedIDs.contains(category.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
         }
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func toggleRoot(_ root: LedgerCategory) {
@@ -806,6 +810,8 @@ private struct AutoCollectCategoryBranchPicker: View {
             if selectedIDs.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
             else if hierarchy { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
         }
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 

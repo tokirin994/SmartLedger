@@ -647,7 +647,7 @@ struct TransactionDraft {
         self.premiumAmount = transaction.premiumAmount.map { String(format: "%.2f", $0) } ?? ""
         self.installmentEnabled = transaction.installmentMonths != nil
         self.installmentMonths = transaction.installmentMonths ?? 1
-        self.installmentStartMonth = transaction.installmentStartMonth ?? .now
+        self.installmentStartMonth = transaction.installmentStartMonth ?? transaction.happenedAt
         self.ocrText = nil
         self.paidByParticipantId = transaction.paidByParticipantId
         self.splitParticipantIds = transaction.splitParticipantIds ?? []
