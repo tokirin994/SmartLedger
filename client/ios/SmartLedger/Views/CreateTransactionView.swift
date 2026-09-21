@@ -55,6 +55,27 @@ struct CreateTransactionView: View {
         selectedBookSupportsSplit && !selectedBookUsesAnonymousSplit
     }
 
+    /// A transaction that is not attached to a book can still be split. These
+    /// participants are intentionally anonymous: only the count and my share
+    /// are recorded, without a payer/member picker.
+    private var unboundSplitCount: Int {
+        draft.splitParticipantIds.count
+    }
+
+    private var unboundSplitEnabled: Bool {
+        selectedBooks.isEmpty && unboundSplitCount > 1
+    }
+
+    private func setUnboundSplitCount(_ count: Int) {
+        guard count > 1 else {
+            draft.splitParticipantIds = []
+            draft.paidByParticipantId = nil
+            return
+        }
+        draft.splitParticipantIds = ["我"] + (2...count).map { "分账成员\($0)" }
+        draft.paidByParticipantId = nil
+    }
+
     private var editingInstallment: Bool {
         editingTransaction?.installmentGroupId != nil
     }
@@ -168,6 +189,31 @@ struct CreateTransactionView: View {
                                 suggestedBookRow(book)
                             }
                         }
+                    }
+
+                    if selectedBooks.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("多人分账")
+                                .font(.headline)
+                            Toggle("启用分账", isOn: Binding(
+                                get: { unboundSplitEnabled },
+                                set: { enabled in setUnboundSplitCount(enabled ? max(unboundSplitCount, 2) : 0) }
+                            ))
+                            if unboundSplitEnabled {
+                                Stepper(
+                                    "分账人数：\(unboundSplitCount)",
+                                    value: Binding(
+                                        get: { unboundSplitCount },
+                                        set: { setUnboundSplitCount($0) }
+                                    ),
+                                    in: 2...20
+                                )
+                                Text("按人数均分，流水仍保留原始总金额；首页和流水统计只计入我的份额。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
 
                     if let selectedBook, selectedBookSupportsSplit {

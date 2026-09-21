@@ -216,6 +216,13 @@ final class LedgerStore: ObservableObject {
             ? bookParticipants
             : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
         let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let unboundSplit = selectedBook == nil && draft.splitParticipantIds.count > 1
+        let resolvedSplitParticipantIDs = selectedBook == nil
+            ? (unboundSplit ? draft.splitParticipantIds : [])
+            : resolvedSplitParticipants.map(\.id)
+        let resolvedSplitParticipantNames = selectedBook == nil
+            ? (unboundSplit ? draft.splitParticipantIds : [])
+            : resolvedSplitParticipants.map(\.name)
 
         if selectedBook?.splitEnabled == true && !anonymousBookSplit {
             guard !resolvedSplitParticipants.isEmpty else {
@@ -269,8 +276,8 @@ final class LedgerStore: ObservableObject {
                     premiumAmount: Double(draft.premiumAmount),
                     paidByParticipantId: resolvedPayer?.id,
                     paidByParticipantName: resolvedPayer?.name,
-                    splitParticipantIds: resolvedSplitParticipants.map(\.id),
-                    splitParticipantNames: resolvedSplitParticipants.map(\.name)
+                    splitParticipantIds: resolvedSplitParticipantIDs,
+                    splitParticipantNames: resolvedSplitParticipantNames
                 )
             )
         }
@@ -300,7 +307,7 @@ final class LedgerStore: ObservableObject {
                 bookId: resolvedBook?.id, bookName: bookName, bookIds: resolvedBooks.map(\.id), bookNames: resolvedBooks.map(\.name),
                 installmentGroupId: nil, installmentIndex: nil, installmentMonths: nil,
                 paidByParticipantId: resolvedPayer?.id, paidByParticipantName: resolvedPayer?.name,
-                splitParticipantIds: resolvedSplitParticipants.map(\.id), splitParticipantNames: resolvedSplitParticipants.map(\.name),
+                splitParticipantIds: resolvedSplitParticipantIDs, splitParticipantNames: resolvedSplitParticipantNames,
                 installmentOriginalTotal: nil, originalAmount: nil, discountAmount: nil, premiumAmount: nil,
                 installmentStartMonth: nil,
                 offsetSourceTransactionId: sourceTransactionId
@@ -336,6 +343,13 @@ final class LedgerStore: ObservableObject {
             ? bookParticipants
             : bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
         let resolvedPayer = anonymousBookSplit ? nil : bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
+        let unboundSplit = selectedBook == nil && draft.splitParticipantIds.count > 1
+        let resolvedSplitParticipantIDs = selectedBook == nil
+            ? (unboundSplit ? draft.splitParticipantIds : [])
+            : resolvedSplitParticipants.map(\.id)
+        let resolvedSplitParticipantNames = selectedBook == nil
+            ? (unboundSplit ? draft.splitParticipantIds : [])
+            : resolvedSplitParticipants.map(\.name)
 
         if selectedBook?.splitEnabled == true && !anonymousBookSplit {
             guard !resolvedSplitParticipants.isEmpty else {
@@ -391,8 +405,8 @@ final class LedgerStore: ObservableObject {
                     installmentMonths: months,
                     paidByParticipantId: resolvedPayer?.id,
                     paidByParticipantName: resolvedPayer?.name,
-                    splitParticipantIds: resolvedSplitParticipants.map(\.id),
-                    splitParticipantNames: resolvedSplitParticipants.map(\.name),
+                    splitParticipantIds: resolvedSplitParticipantIDs,
+                    splitParticipantNames: resolvedSplitParticipantNames,
                     installmentOriginalTotal: amount,
                     originalAmount: Double(draft.originalAmount),
                     discountAmount: Double(draft.discountAmount),
@@ -434,8 +448,8 @@ final class LedgerStore: ObservableObject {
             installmentMonths: existing.installmentMonths,
             paidByParticipantId: resolvedPayer?.id,
             paidByParticipantName: resolvedPayer?.name,
-            splitParticipantIds: resolvedSplitParticipants.map(\.id),
-            splitParticipantNames: resolvedSplitParticipants.map(\.name),
+            splitParticipantIds: resolvedSplitParticipantIDs,
+            splitParticipantNames: resolvedSplitParticipantNames,
             installmentOriginalTotal: existing.installmentOriginalTotal,
             originalAmount: Double(draft.originalAmount),
             discountAmount: Double(draft.discountAmount),

@@ -25,6 +25,22 @@ struct ImportReceiptView: View {
     @State private var editingBatchItem: OCRImportResult?
     @State private var importSaveError: String?
     private let ocrService = OCRImportService()
+
+    private var unboundSplitCount: Int { draft.splitParticipantIds.count }
+
+    private var unboundSplitEnabled: Bool {
+        draft.bookId == nil && unboundSplitCount > 1
+    }
+
+    private func setUnboundSplitCount(_ count: Int) {
+        guard count > 1 else {
+            draft.splitParticipantIds = []
+            draft.paidByParticipantId = nil
+            return
+        }
+        draft.splitParticipantIds = ["我"] + (2...count).map { "分账成员\($0)" }
+        draft.paidByParticipantId = nil
+    }
     
     var body: some View {
         NavigationStack {
@@ -330,6 +346,29 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             Text("不归集到主题账本").tag(Int?.none)
             ForEach(store.books) { book in
                 Text(book.name).tag(Int?.some(book.id))
+            }
+        }
+        if draft.bookId == nil {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("多人分账")
+                    .font(.headline)
+                Toggle("启用分账", isOn: Binding(
+                    get: { unboundSplitEnabled },
+                    set: { enabled in setUnboundSplitCount(enabled ? max(unboundSplitCount, 2) : 0) }
+                ))
+                if unboundSplitEnabled {
+                    Stepper(
+                        "分账人数：\(unboundSplitCount)",
+                        value: Binding(
+                            get: { unboundSplitCount },
+                            set: { setUnboundSplitCount($0) }
+                        ),
+                        in: 2...20
+                    )
+                    Text("按人数均分，原始金额不变；首页和流水统计只计入我的份额。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         Toggle("启用分期", isOn: $draft.installmentEnabled)

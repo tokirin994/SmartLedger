@@ -650,7 +650,9 @@ struct TransactionDraft {
         self.installmentStartMonth = transaction.installmentStartMonth ?? transaction.happenedAt
         self.ocrText = nil
         self.paidByParticipantId = transaction.paidByParticipantId
-        self.splitParticipantIds = transaction.splitParticipantIds ?? []
+        self.splitParticipantIds = transaction.splitParticipantIds.isEmpty
+            ? transaction.splitParticipantNames
+            : transaction.splitParticipantIds
     }
 
     init(parsed: OCRImportResult, source: String = "ocr") {
