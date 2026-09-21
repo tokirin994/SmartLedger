@@ -697,7 +697,7 @@ final class LedgerStore: ObservableObject {
         names.append(book.name)
         let primaryId = ids.first
         let primaryName = names.first
-        let own = book.splitEnabled && transactions[index].splitParticipantIds.isEmpty
+        let own = book.splitEnabled && transactions[index].splitParticipantIds.isEmpty && transactions[index].splitParticipantNames.isEmpty
           ? (book.participants.first(where: { $0.name == "我" }) ?? book.participants.first)
           : nil
         transactions[index] = rebuildTransaction(transactions[index], bookId: primaryId, bookName: primaryName,
@@ -742,7 +742,7 @@ final class LedgerStore: ObservableObject {
         var names = transaction.bookNames
         ids.append(bookId)
         names.append(book.name)
-        let own = book.splitEnabled && transaction.splitParticipantIds.isEmpty
+        let own = book.splitEnabled && transaction.splitParticipantIds.isEmpty && transaction.splitParticipantNames.isEmpty
           ? (book.participants.first(where: { $0.name == "我" }) ?? book.participants.first)
           : nil
         transactions[index] = rebuildTransaction(transaction, bookId: ids.first, bookName: names.first, bookIds: ids, bookNames: names,
