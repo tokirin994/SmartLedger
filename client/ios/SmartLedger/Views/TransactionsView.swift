@@ -80,7 +80,11 @@ struct TransactionsView: View {
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
-                    .background(.ultraThinMaterial)
+                    .padding(.bottom, 10)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .overlay(alignment: .bottom) {
+                        Divider().opacity(0.35)
+                    }
                 }
                 .sheet(isPresented: $showCreateSheet) {
                     CreateTransactionView()
