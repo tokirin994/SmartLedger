@@ -930,6 +930,7 @@ private struct ScrollableDistributionBarChart: View {
          }
        }
        .chartLegend(.hidden)
+       .chartXAxis(.hidden)
        .chartYScale(domain: yDomain.lowerBound...(yDomain.upperBound + max(yDomain.upperBound - yDomain.lowerBound, 1) * 0.08))
        .chartYAxis {
          AxisMarks(position: .leading, values: yTicks.map(\.value)) { value in

@@ -234,19 +234,22 @@ struct TransactionsView: View {
  	}
 
 	private func compactStat(title: String, value: String, tint: Color) -> some View {
- 		HStack(alignment: .firstTextBaseline, spacing: 6) {
- 			VStack(alignment: .leading, spacing: 6) {
-				Text(title)
-					.font(.caption)
-					.foregroundStyle(.secondary)
-				Text(value)
- 					.font(.subheadline.weight(.bold))
- 					.foregroundStyle(tint)
-			}
- 			.frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
- 			.padding(12)
- 			.glassCard(cornerRadius: 18, strokeOpacity: 0.22)
- 		}
+		VStack(alignment: .leading, spacing: 7) {
+			Text(title)
+				.font(.caption)
+				.foregroundStyle(.secondary)
+			Text(value)
+				.font(.system(size: 18, weight: .bold, design: .rounded))
+				.foregroundStyle(tint)
+				.lineLimit(1)
+				.minimumScaleFactor(0.52)
+				.allowsTightening(true)
+				.frame(maxWidth: .infinity, alignment: .leading)
+		}
+		.frame(maxWidth: .infinity, minHeight: 74, maxHeight: 74, alignment: .leading)
+		.padding(.horizontal, 12)
+		.padding(.vertical, 10)
+		.glassCard(cornerRadius: 18, strokeOpacity: 0.22)
 	}
     private func transactionListRow(_ tx: LedgerTransaction) -> some View {
         transactionRow(tx)
@@ -270,7 +273,11 @@ struct TransactionsView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(tx.title).font(.headline).lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(signedAmountText(for: tx)).font(.headline.weight(.bold)).foregroundStyle(tx.kind == .income ? .green : .primary)
+                    Text(signedAmountText(for: tx))
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(tx.kind == .income ? .green : .primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.68)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -293,9 +300,8 @@ struct TransactionsView: View {
                     if let merchant = tx.merchant, !merchant.isEmpty { Label(merchant, systemImage: "storefront").lineLimit(1) }
                 }.font(.caption).foregroundStyle(.secondary)
                 if let payment = tx.paymentMethod, !payment.isEmpty { infoPill(text: payment, systemImage: "creditcard.fill", tint: .teal) }
-                if tx.originalAmount != nil || tx.discountAmount != nil || tx.premiumAmount != nil {
-                    HStack(spacing: 14) {
-                        if let value = tx.originalAmount { miniMetric(title: "原价", value: value.cnyText, tint: .secondary) }
+                if tx.discountAmount != nil || tx.premiumAmount != nil {
+                    HStack(spacing: 8) {
                         if let value = tx.discountAmount { miniMetric(title: "优惠", value: value.cnyText, tint: .green) }
                         if let value = tx.premiumAmount { miniMetric(title: "溢价", value: value.cnyText, tint: .red) }
                     }
@@ -345,20 +351,17 @@ struct TransactionsView: View {
         .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
- 	private func miniMetric(title: String, value: String, tint: Color) -> some View {
- 		VStack(alignment: .leading, spacing: 2) {
-			Text(title)
- 				.font(.caption2)
-				.foregroundStyle(.secondary)
-			Text(value)
- 				.font(.caption.weight(.semibold))
- 				.foregroundStyle(tint)
+	private func miniMetric(title: String, value: String, tint: Color) -> some View {
+		HStack(spacing: 4) {
+			Text(title).font(.caption2).foregroundStyle(.secondary)
+			Text(value).font(.caption.weight(.semibold)).foregroundStyle(tint)
 		}
- 		.padding(.horizontal, 10)
- 		.background(Color.white.opacity(0.14), in: Capsule())
- 		.padding(.vertical, 8)
- 		.background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
- 	}
+		.lineLimit(1)
+		.minimumScaleFactor(0.72)
+		.padding(.horizontal, 9)
+		.padding(.vertical, 6)
+		.background(Color.white.opacity(0.16), in: Capsule())
+	}
  
  	private func signedAmountText(for tx: LedgerTransaction) -> String {
         (tx.kind == .expense ? -tx.amount : tx.amount).cnyText

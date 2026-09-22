@@ -242,9 +242,11 @@ struct CreateTransactionView: View {
                         .padding(.vertical, 4)
                     }
 
-                    bookSplitSection
+                }
 
-                    Section("分期") {
+                bookSplitSection
+
+                Section("分期") {
                         if editingInstallment {
                             Label("这是一组已有的分期流水，编辑不会重新拆分金额。", systemImage: "info.circle")
                                 .font(.subheadline)
@@ -266,19 +268,19 @@ struct CreateTransactionView: View {
                         }
                     }
 
-                    if draft.kind == .expense {
-                        OffsetDraftSection(
-                            offsets: $draft.offsets,
-                            amount: transactionAmount,
-                            happenedAt: draft.happenedAt,
-                            preferredCategoryID: preferredOffsetCategoryID,
-                            categories: offsetIncomeCategories,
-                            existingRatio: existingOffsetRatio,
-                            existingAmount: existingOffsetAmount
-                        )
-                    }
+                if draft.kind == .expense {
+                    OffsetDraftSection(
+                        offsets: $draft.offsets,
+                        amount: transactionAmount,
+                        happenedAt: draft.happenedAt,
+                        preferredCategoryID: preferredOffsetCategoryID,
+                        categories: offsetIncomeCategories,
+                        existingRatio: existingOffsetRatio,
+                        existingAmount: existingOffsetAmount
+                    )
+                }
 
-                    Section("高级字段") {
+                Section("高级字段") {
                         TextField("商户", text: $draft.merchant)
                         TextField("备注", text: $draft.note, axis: .vertical)
                         TextField("原价", text: $draft.originalAmount)
@@ -287,7 +289,6 @@ struct CreateTransactionView: View {
                             .keyboardType(.decimalPad)
                         TextField("溢价金额", text: $draft.premiumAmount)
                             .keyboardType(.decimalPad)
-                    }
                 }
             }
             .dismissKeyboardWhenTappedOutside()
@@ -386,7 +387,7 @@ struct CreateTransactionView: View {
             )
         }
     }
-    .confirmationDialog("改动还未保存", isPresented: $showUnsavedChangesDialog, titleVisibility: .visible) {
+    .alert("改动还未保存", isPresented: $showUnsavedChangesDialog) {
         Button("保存") {
             Task { await saveDraftAndDismiss() }
         }
@@ -412,7 +413,7 @@ struct CreateTransactionView: View {
         .presentationDetents([.height(300)])
         .presentationDragIndicator(.visible)
     }
-    .confirmationDialog("取消分期并合并？", isPresented: $showCancelInstallmentConfirmation, titleVisibility: .visible) {
+    .alert("取消分期并合并？", isPresented: $showCancelInstallmentConfirmation) {
         Button("合并为一笔流水", role: .destructive) {
             Task { await cancelInstallment() }
         }
@@ -420,7 +421,7 @@ struct CreateTransactionView: View {
     } message: {
         Text("所有已生成的分期金额会合并为一笔，未来分期不再单独显示。")
     }
-    .confirmationDialog("立即还清剩余分期？", isPresented: $showPayoffInstallmentConfirmation, titleVisibility: .visible) {
+    .alert("立即还清剩余分期？", isPresented: $showPayoffInstallmentConfirmation) {
         Button("立即还清", role: .destructive) {
             requestPayOffInstallment()
         }
