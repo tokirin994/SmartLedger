@@ -291,6 +291,7 @@ struct CreateTransactionView: View {
                             .keyboardType(.decimalPad)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .dismissKeyboardWhenTappedOutside()
             .navigationTitle(editingTransaction == nil ? "新增流水" : "修改流水")
             .task {

@@ -81,13 +81,51 @@ struct AppleAccountProfile: Codable, Sendable {
 }
 
 struct PersistedLedgerSnapshot: Codable, Sendable {
+    var schemaVersion: Int
     var categories: [LedgerCategory]
     var books: [LedgerBook]
     var transactions: [LedgerTransaction]
     var budgets: [BudgetItem]
+    var transactionLedgerLinks: [TransactionLedgerLink]
     var nextTransactionId: Int
     var nextBookId: Int
     var nextCategoryId: Int
     var nextBudgetId: Int
     var updatedAt: Date
+
+    init(schemaVersion: Int = 2, categories: [LedgerCategory], books: [LedgerBook], transactions: [LedgerTransaction], budgets: [BudgetItem], transactionLedgerLinks: [TransactionLedgerLink] = [], nextTransactionId: Int, nextBookId: Int, nextCategoryId: Int, nextBudgetId: Int, updatedAt: Date) {
+        self.schemaVersion = schemaVersion
+        self.categories = categories
+        self.books = books
+        self.transactions = transactions
+        self.budgets = budgets
+        self.transactionLedgerLinks = transactionLedgerLinks
+        self.nextTransactionId = nextTransactionId
+        self.nextBookId = nextBookId
+        self.nextCategoryId = nextCategoryId
+        self.nextBudgetId = nextBudgetId
+        self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case categories, books, transactions, budgets
+        case transactionLedgerLinks = "transaction_ledger_links"
+        case nextTransactionId, nextBookId, nextCategoryId, nextBudgetId, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        categories = try c.decodeIfPresent([LedgerCategory].self, forKey: .categories) ?? []
+        books = try c.decodeIfPresent([LedgerBook].self, forKey: .books) ?? []
+        transactions = try c.decodeIfPresent([LedgerTransaction].self, forKey: .transactions) ?? []
+        budgets = try c.decodeIfPresent([BudgetItem].self, forKey: .budgets) ?? []
+        transactionLedgerLinks = try c.decodeIfPresent([TransactionLedgerLink].self, forKey: .transactionLedgerLinks) ?? []
+        nextTransactionId = try c.decodeIfPresent(Int.self, forKey: .nextTransactionId) ?? ((transactions.map(\.id).max() ?? 0) + 1)
+        nextBookId = try c.decodeIfPresent(Int.self, forKey: .nextBookId) ?? ((books.map(\.id).max() ?? 0) + 1)
+        nextCategoryId = try c.decodeIfPresent(Int.self, forKey: .nextCategoryId) ?? ((categories.map(\.id).max() ?? 0) + 1)
+        nextBudgetId = try c.decodeIfPresent(Int.self, forKey: .nextBudgetId) ?? ((budgets.map(\.id).max() ?? 0) + 1)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
 }

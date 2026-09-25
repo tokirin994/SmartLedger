@@ -176,6 +176,45 @@ final class LedgerMetaRecord {
   }
 }
 
+@Model
+final class TransactionLedgerLinkRecord {
+  @Attribute(.unique) var id: String
+  var transactionId: Int
+  var ledgerId: Int
+  var sourceRaw: String
+  var includeInStatistics: Bool
+  var splitEnabled: Bool
+  var payerParticipantId: String?
+  var splitParticipantIdsData: Data
+  var splitParticipantNamesData: Data
+  var splitModeRaw: String
+  var splitRatio: Double?
+  var splitAmount: Double?
+  var participantSnapshotData: Data
+  var configVersion: Int
+  var needsReview: Bool
+  var isSplitCustomized: Bool
+
+  init(id: String, transactionId: Int, ledgerId: Int, sourceRaw: String, includeInStatistics: Bool, splitEnabled: Bool, payerParticipantId: String?, splitParticipantIdsData: Data, splitParticipantNamesData: Data, splitModeRaw: String, splitRatio: Double?, splitAmount: Double?, participantSnapshotData: Data, configVersion: Int, needsReview: Bool, isSplitCustomized: Bool) {
+    self.id = id
+    self.transactionId = transactionId
+    self.ledgerId = ledgerId
+    self.sourceRaw = sourceRaw
+    self.includeInStatistics = includeInStatistics
+    self.splitEnabled = splitEnabled
+    self.payerParticipantId = payerParticipantId
+    self.splitParticipantIdsData = splitParticipantIdsData
+    self.splitParticipantNamesData = splitParticipantNamesData
+    self.splitModeRaw = splitModeRaw
+    self.splitRatio = splitRatio
+    self.splitAmount = splitAmount
+    self.participantSnapshotData = participantSnapshotData
+    self.configVersion = configVersion
+    self.needsReview = needsReview
+    self.isSplitCustomized = isSplitCustomized
+  }
+}
+
 actor SwiftDataSnapshotStore {
   private let container: ModelContainer
   private static let storeName = "SmartLedgerLocal"
@@ -213,6 +252,7 @@ actor SwiftDataSnapshotStore {
       LedgerTransactionRecord.self,
       LedgerBudgetRecord.self,
       LedgerMetaRecord.self,
+      TransactionLedgerLinkRecord.self,
       configurations: configuration
     )
   }
@@ -253,17 +293,20 @@ actor SwiftDataSnapshotStore {
     let books = try context.fetch(FetchDescriptor<LedgerBookRecord>()).sorted { $0.id < $1.id }
     let transactions = try context.fetch(FetchDescriptor<LedgerTransactionRecord>()).sorted { $0.date < $1.date }
     let budgets = try context.fetch(FetchDescriptor<LedgerBudgetRecord>()).sorted { $0.id < $1.id }
+    let links = try context.fetch(FetchDescriptor<TransactionLedgerLinkRecord>()).sorted { $0.id < $1.id }
     let meta = try context.fetch(FetchDescriptor<LedgerMetaRecord>()).first
 
-    guard meta != nil || !categories.isEmpty || !books.isEmpty || !transactions.isEmpty || !budgets.isEmpty else {
+    guard meta != nil || !categories.isEmpty || !books.isEmpty || !transactions.isEmpty || !budgets.isEmpty || !links.isEmpty else {
       return nil
     }
 
     return PersistedLedgerSnapshot(
+      schemaVersion: links.isEmpty ? 1 : 2,
       categories: buildCategoryTree(from: categories),
       books: books.map { $0.toModel() },
       transactions: transactions.map { $0.toModel() },
       budgets: budgets.map { $0.toModel() },
+      transactionLedgerLinks: links.map { $0.toModel() },
       nextTransactionId: meta?.nextTransactionId ?? 1000,
       nextBookId: meta?.nextBookId ?? 100,
       nextCategoryId: meta?.nextCategoryId ?? 1000,
@@ -278,7 +321,8 @@ actor SwiftDataSnapshotStore {
     try deleteAll(LedgerCategoryRecord.self, in: context)
     try deleteAll(LedgerBookRecord.self, in: context)
     try deleteAll(LedgerTransactionRecord.self, in: context)
-try deleteAll(LedgerBudgetRecord.self, in: context)
+   try deleteAll(LedgerBudgetRecord.self, in: context)
+   try deleteAll(TransactionLedgerLinkRecord.self, in: context)
    try deleteAll(LedgerMetaRecord.self, in: context)
 
    for category in snapshot.categories {
@@ -298,6 +342,10 @@ try deleteAll(LedgerBudgetRecord.self, in: context)
 
    for budget in snapshot.budgets {
      context.insert(LedgerBudgetRecord(from: budget))
+   }
+
+   for link in snapshot.transactionLedgerLinks {
+     context.insert(TransactionLedgerLinkRecord(from: link))
    }
 
    context.insert(
@@ -505,6 +553,50 @@ private extension LedgerBudgetRecord {
      endDate: endDate,
      spentAmount: spentAmount,
      usageRatio: usageRatio
+   )
+ }
+}
+
+private extension TransactionLedgerLinkRecord {
+ convenience init(from link: TransactionLedgerLink) {
+   self.init(
+     id: link.id,
+     transactionId: link.transactionId,
+     ledgerId: link.ledgerId,
+     sourceRaw: link.source.rawValue,
+     includeInStatistics: link.includeInStatistics,
+     splitEnabled: link.splitEnabled,
+     payerParticipantId: link.payerParticipantId,
+     splitParticipantIdsData: (try? JSONEncoder().encode(link.splitParticipantIds)) ?? Data("[]".utf8),
+     splitParticipantNamesData: (try? JSONEncoder().encode(link.splitParticipantNames)) ?? Data("[]".utf8),
+     splitModeRaw: link.splitMode.rawValue,
+     splitRatio: link.splitRatio,
+     splitAmount: link.splitAmount,
+     participantSnapshotData: (try? JSONEncoder().encode(link.participantSnapshot)) ?? Data("[]".utf8),
+     configVersion: link.configVersion,
+     needsReview: link.needsReview,
+     isSplitCustomized: link.isSplitCustomized
+   )
+ }
+
+ func toModel() -> TransactionLedgerLink {
+   TransactionLedgerLink(
+     id: id,
+     transactionId: transactionId,
+     ledgerId: ledgerId,
+     source: TransactionLedgerLinkSource(rawValue: sourceRaw) ?? .manual,
+     includeInStatistics: includeInStatistics,
+     splitEnabled: splitEnabled,
+     payerParticipantId: payerParticipantId,
+     splitParticipantIds: (try? JSONDecoder().decode([String].self, from: splitParticipantIdsData)) ?? [],
+     splitParticipantNames: (try? JSONDecoder().decode([String].self, from: splitParticipantNamesData)) ?? [],
+     splitMode: TransactionSplitMode(rawValue: splitModeRaw) ?? .equal,
+     splitRatio: splitRatio,
+     splitAmount: splitAmount,
+     participantSnapshot: (try? JSONDecoder().decode([LedgerParticipantSnapshot].self, from: participantSnapshotData)) ?? [],
+     configVersion: configVersion,
+     needsReview: needsReview,
+     isSplitCustomized: isSplitCustomized
    )
  }
 }

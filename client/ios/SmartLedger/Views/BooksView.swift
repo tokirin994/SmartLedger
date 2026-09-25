@@ -45,6 +45,7 @@ struct BooksView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollDismissesKeyboard(.interactively)
             .dismissKeyboardWhenTappedOutside()
             .navigationTitle("账本")
             .toolbar {
@@ -141,7 +142,7 @@ private struct BookDetailView: View {
     @State private var exportFormat: BookExportFormat?
     @State private var showExportFormatPicker = false
 
-    private var relatedTransactions: [LedgerTransaction] { store.transactions.filter { $0.bookIds.contains(book.id) || $0.bookId == book.id }.sorted { $0.happenedAt > $1.happenedAt } }
+    private var relatedTransactions: [LedgerTransaction] { store.transactionsForBook(book.id).sorted { $0.happenedAt > $1.happenedAt } }
     private var current: LedgerBook { store.books.first(where: { $0.id == book.id }) ?? book }
     private func transactionAmountText(_ transaction: LedgerTransaction) -> String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
     private func transactionAmountColor(_ transaction: LedgerTransaction) -> Color { transaction.kind == .expense ? .primary : .green }
@@ -493,6 +494,7 @@ private struct BookEditorView: View {
                     HStack { TextField("成员昵称", text: $newMember); Button("添加") { let value = newMember.trimmingCharacters(in: .whitespacesAndNewlines); if !value.isEmpty && !members.contains(value) { members.append(value); newMember = "" } } }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .dismissKeyboardWhenTappedOutside()
             .navigationTitle(book == nil ? "新建账本" : "编辑账本")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { Task { await save() } } } }
@@ -820,20 +822,3 @@ private enum AutoCollectFlowFilter: String, CaseIterable, Identifiable {
     var title: String { self == .all ? "全部" : (self == .expense ? "支出" : "收入") }
     var flowType: FlowType? { self == .expense ? .expense : (self == .income ? .income : nil) }
 }
-/*
-        selectedIDs.subtract(root.flattened().map(\.id))
-            selectedIDs.insert(root.id)
-            expandedRootIDs.remove(root.id)
-        }
-    }
-
-    private func toggleChild(_ child: LedgerCategory) {
-        if selectedIDs.contains(child.id) { selectedIDs.remove(child.id) } else { selectedIDs.insert(child.id) }
-    }
-}
-*/
-/*
-s.remove(child.id) } else { selectedIDs.insert(child.id) }
-    }
-}
-*/

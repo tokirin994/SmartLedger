@@ -70,20 +70,43 @@ struct ReceiptParser {
         if isEcommerceOrderPage(lines) {
             return parseEcommerceOrders(lines: lines)
         }
-        if isAlipayListPage(lines) {
+        let statementPage = lines.contains(where: { $0.contains("我的账单") || $0.contains("个人消费卡账户") })
+        if isAlipayListPage(lines) || statementPage {
             let alipayResults = parseAlipayList(lines: lines)
             let genericResults = parseList(lines: lines)
             // Alipay layouts differ by app version. Keep whichever parser found
             // more complete row anchors rather than silently dropping records.
+            let completeAlipay = alipayResults.filter { $0.amount != nil && $0.happenedAt != nil }
+            if !completeAlipay.isEmpty { return alipayResults }
             return genericResults.count > alipayResults.count ? genericResults : alipayResults
         }
         return parseList(lines: lines)
     }
 
     private func normalizedLines(from rawText: String) -> [String] {
+        // OCR 服务会把同一视觉行的多个文本块用空格连接。将明显的列分隔
+        // 拆开后，标题、日期、金额即使来自不同列也能进入同一套通用规则；
+        // 普通标题中的单个空格不会被拆分，因此不依赖某个平台的固定模板。
         rawText
             .split(whereSeparator: \.isNewline)
-            .map { normalizeLine(String($0)) }
+            .flatMap { rawLine -> [String] in
+                let normalized = normalizeLine(String(rawLine))
+                guard !normalized.isEmpty else { return [] }
+                let columns = normalized
+                    .split(whereSeparator: { $0 == "\t" })
+                    .flatMap { part -> [Substring] in
+                        part.split(whereSeparator: { $0 == " " })
+                    }
+                if columns.count > 1 && normalized.range(of: #"\s{2,}"#, options: .regularExpression) != nil {
+                    // 详情页的“商品/商品说明”经常包含空格或被 OCR 拼在同一视觉行。
+                    // 保留完整视觉行，避免把商品名拆成多个字段；列表页仍按列拆分。
+                    if detailFieldLabels.contains(where: { normalized.contains($0) }) {
+                        return [normalized]
+                    }
+                    return columns.map(String.init)
+                }
+                return [normalized]
+            }
             .filter { !$0.isEmpty }
     }
 
@@ -92,6 +115,9 @@ struct ReceiptParser {
             .replacingOccurrences(of: "—", with: "-")
             .replacingOccurrences(of: "‑", with: "-")
             .replacingOccurrences(of: "‑", with: "-")
+            .replacingOccurrences(of: "−", with: "-")
+            .replacingOccurrences(of: "﹣", with: "-")
+            .replacingOccurrences(of: "－", with: "-")
             .replacingOccurrences(of: "¥70‑00", with: "¥70.00")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -100,7 +126,11 @@ struct ReceiptParser {
         let score = detailFieldLabels.reduce(0) { partial, field in
             partial + (lines.contains(where: { $0.contains(field) }) ? 1 : 0)
         }
-        return score >= 4
+        // 银行/信用卡明细页的字段较少，通常只有“交易明细、交易时间、
+        // 交易金额/已入账”。不要因为字段不足而退化成通用列表解析。
+        let compactDetail = lines.contains(where: { $0.contains("交易明细") }) &&
+            lines.contains(where: { $0.contains("交易时间") || $0.contains("交易金额") || $0.contains("已入账") })
+        return score >= 4 || compactDetail
     }
 
     private func isWeChatTransferDetailPage(_ lines: [String]) -> Bool {
@@ -114,8 +144,11 @@ struct ReceiptParser {
     }
 
     private func isAlipayListPage(_ lines: [String]) -> Bool {
-        lines.contains(where: { $0.contains("搜索交易记录") }) &&
-        lines.contains(where: { $0.contains("收支分析") })
+        let classic = lines.contains(where: { $0.contains("搜索交易记录") }) &&
+            lines.contains(where: { $0.contains("收支分析") })
+        let statement = lines.contains(where: { $0.contains("我的账单") || $0.contains("个人消费卡账户") }) &&
+            lines.contains(where: { $0.contains("可用额度") || $0.contains("预估未出账单") })
+        return classic || statement
     }
 
     private func parseWeChatTransferDetail(lines: [String]) -> OCRImportResult {
@@ -125,11 +158,19 @@ struct ReceiptParser {
 
         let amountLine = lines.first(where: { $0.range(of: #"^[-‑]?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
-        let happenedAt = extractDate(from: extractWeChatTransferFieldValue(label: "转账时间", lines: lines) ?? fieldMap["转账时间"] ?? text)
+        // 只接受截图正文中的日历日期。状态栏通常只有“21:14”这样的时间，
+        // 不能作为流水时间，否则会把手机状态栏误识别成交易时间。
+        let happenedAt = extractTransactionDate(
+            preferredValues: [
+                extractWeChatTransferFieldValue(label: "转账时间", lines: lines),
+                fieldMap["转账时间"]
+            ],
+            lines: lines
+        )
         let paymentMethod = normalizePaymentMethod(extractWeChatTransferFieldValue(label: "支付方式", lines: lines) ?? fieldMap["支付方式"] ?? fieldMap["付款方式"] ?? "零钱")
         let merchant = normalizeListMerchant(transferHeadline ?? "") ?? transferHeadline
         // 商品名称优先；转账截图通常没有商品字段，此时自然回退到对方账户名称。
-        let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant) ?? transferHeadline ?? merchant ?? "转账详情"
+        let title = transferHeadline ?? preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant) ?? merchant ?? "转账详情"
         let kind = inferKind(in: text, lines: lines, amountLine: amountLine, fallback: .expense)
         let detailKeys = ["当前状态", "收款方备注", "支付方式", "转账时间", "转账单号", "零钱余额"]
         let details = detailKeys
@@ -161,10 +202,13 @@ struct ReceiptParser {
         let text = lines.joined(separator: "\n")
         let amountLine = lines.first(where: { $0.range(of: #"^[-‑]?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
         let amount = extractCurrency(from: amountLine)
-        let happenedAt = lines.first(where: { $0.range(of: #"\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}(?::\d{2})?"#, options: .regularExpression) != nil }).flatMap { extractDate(from: $0) }
+        let fieldMap = makeFieldMap(lines: lines)
+        let happenedAt = extractTransactionDate(
+            preferredValues: [fieldMap["支付时间"], fieldMap["交易时间"]],
+            lines: lines
+        )
         let paymentMethod = extractAlipayDetailPaymentMethod(from: lines)
         let merchant = extractAlipayDetailMerchant(from: lines)
-        let fieldMap = makeFieldMap(lines: lines)
         let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant)
             ?? extractAlipayDetailTitle(from: lines)
             ?? merchant
@@ -190,20 +234,24 @@ struct ReceiptParser {
     }
 
     private func parseAlipayList(lines: [String]) -> [OCRImportResult] {
-        let filtered = lines.filter { !isAlipayListNoiseLine($0) }
+        let isStatementPage = lines.contains { $0.contains("我的账单") || $0.contains("个人消费卡账户") }
+        let filtered = isStatementPage ? lines : lines.filter { !isAlipayListNoiseLine($0) }
         let currentYear = Calendar.current.component(.year, from: Date())
         var results: [OCRImportResult] = []
 
         for section in buildAlipayListSections(from: filtered) {
-            let items = parseAlipayListItems(in: section.lines, expenseTotal: section.expenseTotal)
+            let items = section.items
             for (itemIndex, item) in items.enumerated() {
-                let rawAmount = item.amountText.flatMap { extractSignedAmount(from: $0) } ?? item.amountText.flatMap { text in extractCurrency(from: text).map { -$0 } } ?? {
+            let rawAmount = item.amountText.flatMap { extractListAmount(from: $0) } ?? {
                     if items.count == 1, let total = section.expenseTotal { return -abs(total) }
                     return nil
                 }()
                 let happenedAt = parseAlipayListDate(item.dateLine, fallbackYear: currentYear)
 
-                let kind: FlowType = (rawAmount ?? -1) < 0 ? .expense : .income
+                let explicitIncome = item.title.contains("收款") || item.title.contains("转入") || item.title.contains("退款") || item.category == "收入" || item.category?.contains("退款") == true
+                // 部分信用卡/账单列表把支出金额显示成无符号的 ¥22.00；
+                // 无明确收入语义时按支出处理，避免整页被误判成收入。
+                let kind: FlowType = explicitIncome ? .income : .expense
                 let merchant = meaningfulAlipayListMerchant(provider: item.provider, title: item.title)
                 let paymentMethod: String? = "支付宝"
                 let classified = normalizeClassifiedResult(kind: kind, classify(text: [item.title, merchant, item.category, item.provider].compactMap { $0 }.joined(separator: "\n")))
@@ -241,7 +289,10 @@ struct ReceiptParser {
         let amount = extractDetailAmount(from: lines)
         let originalAmount = extractOriginalAmount(from: lines, fieldMap: fieldMap)
         let discountAmount = extractDiscountAmount(from: lines, fieldMap: fieldMap)
-        let happenedAt = extractDate(from: fieldMap["支付时间"] ?? fieldMap["转账时间"] ?? text)
+        let happenedAt = extractTransactionDate(
+            preferredValues: [fieldMap["支付时间"], fieldMap["转账时间"], fieldMap["交易时间"]],
+            lines: lines
+        )
         let merchant = preferredDetailMerchant(fieldMap: fieldMap, lines: lines)
         let title = preferredDetailTitle(fieldMap: fieldMap, lines: lines, merchant: merchant)
         let paymentMethod = extractPaymentMethod(fieldMap: fieldMap, lines: lines)
@@ -269,7 +320,8 @@ struct ReceiptParser {
 
 private func isEcommerceOrderPage(_ lines: [String]) -> Bool {
     lines.contains(where: { $0.contains("我的订单") || $0.contains("全部订单") }) &&
-    lines.contains(where: { $0.contains("实付款") || $0.contains("实付") })
+    (lines.contains(where: { $0.contains("实付款") || $0.contains("实付") }) ||
+     lines.contains(where: { $0.range(of: #"下单[：:]?\s*\d{4}[-年]\d{1,2}[-月]\d{1,2}"#, options: .regularExpression) != nil }))
 }
 
 private func parseEcommerceOrders(lines: [String]) -> [OCRImportResult] {
@@ -307,7 +359,51 @@ private func parseEcommerceOrders(lines: [String]) -> [OCRImportResult] {
             discountAmount: nil
         ))
     }
+    if !results.isEmpty { return results }
+
+    // 订单列表有时只显示“下单时间”和右侧实付金额，不出现“实付”标签。
+    // 按订单时间切分卡片，再从同一局部区域选择金额和商品名，适配不同平台布局。
+    let dateIndices = lines.indices.filter { lines[$0].range(of: #"下单[：:]?\s*\d{4}[-年]\d{1,2}[-月]\d{1,2}"#, options: .regularExpression) != nil }
+    for dateIndex in dateIndices {
+        let start = max(0, dateIndex - 6)
+        let end = min(lines.count, dateIndex + 4)
+        let window = Array(lines[start..<end])
+        guard let title = window.reversed().first(where: { ecommerceTitleScore($0) > 0 }) else { continue }
+        let amount = window.compactMap(extractCurrencyAnywhere).first
+        let dateLine = lines[dateIndex]
+        let happenedAt = parseEcommerceDateWithTime(dateLine, year: year)
+        let classified = normalizeClassifiedResult(kind: .expense, classify(text: title))
+        results.append(OCRImportResult(
+            amount: amount,
+            kind: .expense,
+            merchant: "电商订单",
+            paymentMethod: nil,
+            title: title,
+            happenedAt: happenedAt,
+            categoryKeyword: classified.keyword,
+            categoryPath: classified.path,
+            details: [OCRLineItem(label: "识别来源", value: "订单列表")],
+            confidence: amount == nil ? 0.52 : 0.78,
+            rawLines: window,
+            originalAmount: nil,
+            discountAmount: nil
+        ))
+    }
     return results
+}
+
+private func parseEcommerceDateWithTime(_ line: String, year: Int) -> Date? {
+    let pattern = #"下单[：:]?\s*(\d{4})[-年](\d{1,2})[-月](\d{1,2})[日\s]+(\d{1,2}):(\d{2})"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) else { return nil }
+    let ns = line as NSString
+    var comps = DateComponents()
+    comps.year = Int(ns.substring(with: match.range(at: 1))) ?? year
+    comps.month = Int(ns.substring(with: match.range(at: 2))) ?? 1
+    comps.day = Int(ns.substring(with: match.range(at: 3))) ?? 1
+    comps.hour = Int(ns.substring(with: match.range(at: 4))) ?? 0
+    comps.minute = Int(ns.substring(with: match.range(at: 5))) ?? 0
+    return Calendar.current.date(from: comps)
 }
 
 private func extractEcommercePaidAmount(from line: String) -> Double? {
@@ -321,8 +417,9 @@ private func extractEcommercePaidAmount(from line: String) -> Double? {
 private func ecommerceTitleScore(_ line: String) -> Int {
     guard line.range(of: #"[\u4e00-\u9fffA-Za-z]"#, options: .regularExpression) != nil,
           !line.contains("交易成功"), !line.contains("待评价"), !line.contains("更多"),
-          !line.contains("申请"), !line.contains("实付款"), !line.contains("实付"),
-          !line.contains("旗舰店"), !line.contains("官方店") else { return 0 }
+           !line.contains("申请"), !line.contains("实付款"), !line.contains("实付"),
+           !line.contains("旗舰店"), !line.contains("官方店"), !line.contains("下单"),
+           !line.contains("全部订单"), !line.contains("我的订单") else { return 0 }
     let stripped = cleanListTitle(line)
     guard stripped.count >= 5 else { return 0 }
     return min(stripped.count, 100)
@@ -346,44 +443,58 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
     let cleaned = lines.filter { !isNoiseLine($0) }
     let pagePaymentMethod = inferListPaymentMethod(fromPageLines: lines)
 
-    var records: [(title: String, dateLine: String, month: Int, inlineAmount: Double?)] = []
+    var records: [(title: String, dateLine: String, month: Int, inlineAmount: Double?, incomeHint: Bool)] = []
     for index in cleaned.indices {
         let line = cleaned[index]
         if let month = extractMonthHeader(from: line) {
             currentMonth = month
             // A visual OCR row can contain the month header and the first
             // transaction together. Do not discard it if it includes an amount.
-            if extractSignedAmountAnywhere(in: line) == nil { continue }
+             if extractListAmountAnywhere(in: line) == nil { continue }
+        }
+        if let month = extractSimpleMonthHeader(from: line), !isListDateLine(line) {
+            currentMonth = month
+            continue
         }
         guard isListDateLine(line) else { continue }
         // Vision may put a title, amount and date in separate visual rows. Pick
         // the nearest human-readable row, then search the surrounding record for
         // its signed amount instead of requiring title and amount to share a row.
-        let candidateStart = max(0, index - 4)
-        let nearbyBefore = Array(cleaned[candidateStart..<index])
-        guard let titleLine = nearbyBefore.reversed().first(where: isTransactionTitleLine) else { continue }
-        let nearbyAfter = Array(cleaned[index..<min(cleaned.count, index + 3)])
-        let inlineAmount = ([titleLine] + Array(nearbyBefore.reversed()) + nearbyAfter)
-            .compactMap(extractSignedAmountAnywhere(in:))
+         let candidateStart = max(0, index - 4)
+         let nearbyBefore = Array(cleaned[candidateStart..<index])
+         let nearbyAfter = Array(cleaned[index..<min(cleaned.count, index + 5)])
+         // 不同账单把日期放在标题之前或之后：两种顺序都支持，
+         // 仍然只使用邻近文本块，不依赖固定屏幕坐标。
+         let titleBefore = nearbyBefore.reversed().first(where: isTransactionTitleLine)
+         let titleAfter = nearbyAfter.dropFirst().first(where: isTransactionTitleLine)
+         let dateHasTime = line.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil
+         guard let titleLine = (dateHasTime ? (titleBefore ?? titleAfter) : (titleAfter ?? titleBefore)) else { continue }
+         let inlineAmount = ([titleLine] + Array(nearbyBefore.reversed()) + nearbyAfter)
+            .compactMap(extractListAmountAnywhere(in:))
             .first
-        records.append((title: cleanListTitle(titleLine), dateLine: line, month: currentMonth, inlineAmount: inlineAmount))
+         let context = ([titleLine] + nearbyBefore.suffix(2) + nearbyAfter.prefix(3)).joined(separator: "\n")
+         let incomeHint = context.contains("退款") || context.contains("转入") || context.contains("收入") ||
+             (context.contains("收款") && !titleLine.contains("收钱码") && (inlineAmount ?? -1) >= 0)
+         records.append((title: cleanListTitle(titleLine), dateLine: line, month: currentMonth, inlineAmount: inlineAmount, incomeHint: incomeHint))
     }
 
     let amountLines = cleaned.filter { line in
-        extractSignedAmount(from: line) != nil && !isBalanceLine(line)
+        extractListAmount(from: line) != nil && !isBalanceLine(line)
     }
 
     guard !records.isEmpty else {
-        return []
+        return parseLooseList(lines: lines, paymentMethod: pagePaymentMethod, fallbackYear: currentYear)
     }
 
     for idx in records.indices {
-        let amount = records[idx].inlineAmount ?? (idx < amountLines.count ? extractSignedAmount(from: amountLines[idx]) : nil)
+        let amount = records[idx].inlineAmount ?? (idx < amountLines.count ? extractListAmount(from: amountLines[idx]) : nil)
         guard let happenedAt = parseListDate(records[idx].dateLine, fallbackYear: currentYear, monthOverride: records[idx].month) else {
             continue
         }
 
-        let kind: FlowType = (amount ?? -1) < 0 ? .expense : .income
+        // 列表页常将支出显示为无符号 ¥22.00；没有明确收入语义时按支出，
+        // 只有“退款/转入/收入”等上下文才判定为收入。
+        let kind: FlowType = records[idx].incomeHint ? .income : .expense
         let displayAmount = amount.map(abs)
         let title = records[idx].title
         let merchant = normalizeListMerchant(title)
@@ -419,6 +530,58 @@ private func parseList(lines: [String]) -> [OCRImportResult] {
     return results
 }
 
+/// 最后一道与平台无关的兜底：当 OCR 将日期拆成多个文本块时，仍按“金额附近的
+/// 标题 + 日期”建立流水。它只在常规列表规则完全没有命中时运行，避免把汇总金额
+/// 当成流水，同时不依赖任何固定坐标或平台模板。
+private func parseLooseList(lines: [String], paymentMethod: String?, fallbackYear: Int) -> [OCRImportResult] {
+    var results: [OCRImportResult] = []
+    var seen = Set<String>()
+    for index in lines.indices {
+        guard let amount = extractListAmountAnywhere(in: lines[index]), amount != 0,
+              !isBalanceLine(lines[index]) else { continue }
+        let windowStart = max(0, index - 5)
+        let windowEnd = min(lines.count, index + 4)
+        let window = Array(lines[windowStart..<windowEnd])
+        guard let titleLine = window.first(where: { candidate in
+            isTransactionTitleLine(candidate) &&
+            !isListDateLine(candidate) &&
+            !candidate.contains("总") &&
+            !candidate.contains("预算") &&
+            !candidate.contains("分类")
+        }) else { continue }
+        let title = cleanListTitle(titleLine)
+        guard title.count >= 2 else { continue }
+        let dateLine = window.first(where: isListDateLine)
+        let happenedAt = dateLine.flatMap {
+            parseListDate($0, fallbackYear: fallbackYear,
+                          monthOverride: Calendar.current.component(.month, from: Date()))
+        }
+        let dateKey = dateLine ?? ""
+        let key = "\(title)|\(abs(amount))|\(dateKey)"
+        guard seen.insert(key).inserted else { continue }
+        let context = window.joined(separator: "\n")
+        let kind: FlowType = context.contains("退款") || context.contains("转入") || context.contains("收入") ? .income : .expense
+        let merchant = normalizeListMerchant(title)
+        let classified = normalizeClassifiedResult(kind: kind, classify(text: [title, merchant].compactMap { $0 }.joined(separator: "\n")))
+        results.append(OCRImportResult(
+            amount: abs(amount),
+            kind: kind,
+            merchant: merchant,
+            paymentMethod: inferListPaymentMethod(from: title, fallback: paymentMethod),
+            title: title,
+            happenedAt: happenedAt,
+            categoryKeyword: classified.keyword,
+            categoryPath: classified.path,
+            details: [OCRLineItem(label: "识别来源", value: "通用列表兜底")],
+            confidence: happenedAt == nil ? 0.48 : 0.68,
+            rawLines: window,
+            originalAmount: nil,
+            discountAmount: nil
+        ))
+    }
+    return results
+}
+
 private func parseFallback(lines: [String]) -> OCRImportResult {
     let text = lines.joined(separator: "\n")
     let kind = detectKind(in: text)
@@ -426,7 +589,7 @@ private func parseFallback(lines: [String]) -> OCRImportResult {
     let merchant = extractFallbackMerchant(from: lines)
     let paymentMethod = extractPaymentMethod(fieldMap: makeFieldMap(lines: lines), lines: lines)
     let details = extractFallbackDetails(from: lines)
-    let happenedAt = extractDate(from: text)
+    let happenedAt = extractTransactionDate(preferredValues: [], lines: lines)
     let classified = normalizeClassifiedResult(kind: kind, classify(text: [text, merchant, paymentMethod].compactMap { $0 }.joined(separator: "\n")))
     let categoryKeyword = classified.keyword
     let categoryPath = classified.path
@@ -454,10 +617,12 @@ private func parseFallback(lines: [String]) -> OCRImportResult {
 
 private func makeFieldMap(lines: [String]) -> [String: String] {
     var map: [String: String] = [:]
+    // 更具体的字段必须先匹配，例如“商品名称”不能先被短字段“商品”截断。
+    let labelsBySpecificity = detailFieldLabels.sorted { $0.count > $1.count }
     // 识别服务会将同一视觉行的左右两列合并，例如“支付方式    零钱”。
     // 先取同一行标签后的内容，再兼容旧版逐行标签/值结构。
     for line in lines {
-        for label in detailFieldLabels where map[label] == nil {
+        for label in labelsBySpecificity where map[label] == nil {
             guard let range = line.range(of: label) else { continue }
             let inline = line[range.upperBound...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -496,7 +661,7 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
          i += 1
        }
        for (index, line) in lines.enumerated() {
-         for label in detailFieldLabels where line == label || line.contains(label + ": ") || line.contains(label +
+         for label in labelsBySpecificity where line == label || line.contains(label + ": ") || line.contains(label +
  ":") {
            if map[label]?.isEmpty == false { continue }
            if let inline = valueAfterColon(in: line), !inline.isEmpty {
@@ -514,19 +679,24 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return parts.dropFirst().joined(separator: ": ").trimmingCharacters(in: .whitespacesAndNewlines)
      }
 
-     private func extractDetailAmount(from lines: [String]) -> Double? {
-       let strongCandidates = lines.compactMap { line -> Double? in
-         guard line.contains("-") || line.contains("¥") || line.contains("￥") else { return nil }
-         guard !line.contains("原价"), !line.contains("优惠"), !line.contains("余额") else { return nil }
-         guard line.range(of: #"^-?\s*[¥￥]?\s*\d+(?:\.\d{1,2})?$"#, options: .regularExpression) != nil else { return
- nil }
-         return extractCurrency(from: line)
-       }
-       if let amount = strongCandidates.first(where: { $0 > 0.01 }) {
-         return amount
-       }
-       return extractFallbackAmount(from: lines)
-     }
+      private func extractDetailAmount(from lines: [String]) -> Double? {
+        let candidates: [(value: Double, index: Int, score: Int)] = lines.enumerated().flatMap { index, line in
+          guard !line.contains("原价"), !line.contains("优惠"), !line.contains("余额"), !shouldIgnoreNumericLine(line) else {
+            return [] as [(value: Double, index: Int, score: Int)]
+          }
+          return amountTokens(in: line).compactMap { token -> (Double, Int, Int)? in
+            guard let value = parseAmountToken(token) else { return nil }
+            var score = 100 - index
+            if token.contains("-") { score += 45 }
+            if token.contains("¥") || token.contains("￥") { score += 25 }
+            if line.contains("支付") || line.contains("收款") || line.contains("实付") || line.contains("合计") || line.contains("总计") || line.contains("实际") { score += 30 }
+            return (abs(value), index, score)
+          }
+        }
+        return candidates.sorted { lhs, rhs in
+          lhs.score == rhs.score ? lhs.index < rhs.index : lhs.score > rhs.score
+        }.first?.value ?? extractFallbackAmount(from: lines)
+      }
 
      private func extractOriginalAmount(from lines: [String], fieldMap: [String: String]) -> Double? {
        if let value = extractCurrency(from: fieldMap["原价"]) { return value }
@@ -553,15 +723,17 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return nil
      }
 
-     private func extractFallbackAmount(from lines: [String]) -> Double? {
-       var candidates: [(Double, Int)] = []
-       for (idx, line) in lines.enumerated() {
-         if shouldIgnoreNumericLine(line) { continue }
-         if let value = extractCurrency(from: line) {
-           let weight = amountWeight(for: line, index: idx)
-           candidates.append((value, weight))
-         }
-       }
+      private func extractFallbackAmount(from lines: [String]) -> Double? {
+        var candidates: [(Double, Int)] = []
+        for (idx, line) in lines.enumerated() {
+          if shouldIgnoreNumericLine(line) { continue }
+          for token in amountTokens(in: line) {
+            if let value = parseAmountToken(token) {
+              let weight = amountWeight(for: line, index: idx)
+              candidates.append((abs(value), weight))
+            }
+          }
+        }
        return candidates.sorted { lhs, rhs in
          lhs.1 == rhs.1 ? lhs.0 > rhs.0 : lhs.1 > rhs.1
        }.first?.0
@@ -584,62 +756,130 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
  line.contains("余额") {
          return true
        }
-       if line.range(of: #"^\d{1,2}月\d{2,4}$"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"^\d{1,2}月\d{2,4}$"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"^\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?$"#, options: .regularExpression) != nil { return true }
+        if line.range(of: #"^\d{4}[./-]\d{1,2}[./-]\d{1,2}(?:\s+\d{1,2}:\d{2})?$"#, options: .regularExpression) != nil { return true }
        if line.range(of: #"^\d{4}年\d{1,2}月(?:\s*\d{1,2})?(?:\.\d{2})?$"#, options:
  .regularExpression) != nil { return true }
        if line.range(of: #"^\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}$"#, options: .regularExpression) != nil { return true }
        return false
      }
 
-     private func extractCurrency(from text: String?) -> Double? {
-       guard let text else { return nil }
-       let normalized = normalizedAmountText(text)
-       if let range = normalized.range(of: #"^-?\s*[¥￥]?\s*\d+(?:\.\d{1,2})#"#, options: .regularExpression) {
-         let value = String(normalized[range])
-           .replacingOccurrences(of: "¥", with: "")
-           .replacingOccurrences(of: "￥", with: "")
-           .replacingOccurrences(of: " ", with: "")
-         return abs(Double(value) ?? 0)
-       }
-       return nil
-     }
+      private func extractCurrency(from text: String?) -> Double? {
+        guard let text else { return nil }
+        return amountTokens(in: text).compactMap(parseAmountToken).first.map(abs)
+      }
 
-     private func extractCurrencyAnywhere(_ text: String) -> Double? {
-       let normalized = normalizedAmountText(text)
-       guard let range = normalized.range(of: #"[¥￥]\s*\d+(?:\.\d{1,2})?"#, options: .regularExpression) else { return nil }
-       return Double(String(normalized[range])
-         .replacingOccurrences(of: "¥", with: "")
-         .replacingOccurrences(of: "￥", with: "")
-         .replacingOccurrences(of: " ", with: ""))
-     }
+      private func extractCurrencyAnywhere(_ text: String) -> Double? {
+        amountTokens(in: text).compactMap(parseAmountToken).first.map(abs)
+      }
 
-     private func extractSignedAmount(from text: String) -> Double? {
-       let normalized = normalizedAmountText(text)
-       guard let range = normalized.range(of: #"^[-+]\s*[¥￥]?\s*\d+(?:\.\d{1,2})"#, options: .regularExpression) else { return nil }
-       return Double(String(normalized[range]).replacingOccurrences(of: "¥", with: "").replacingOccurrences(of: "￥", with: "").replacingOccurrences(of: " ", with: ""))
-     }
+      private func extractSignedAmount(from text: String) -> Double? {
+        amountTokens(in: text).compactMap(parseAmountToken).first(where: { $0 < 0 || text.contains("+") })
+      }
 
-     private func extractSignedAmountAnywhere(in text: String) -> Double? {
-       let normalized = normalizedAmountText(text)
-       let patterns = [#"[-+]\s*[¥￥]?\s*\d+(?:\.\d{1,2})"#, #"[¥￥]\s*[-+]\s*\d+(?:\.\d{1,2})"#]
-       for pattern in patterns where normalized.range(of: pattern, options: .regularExpression) != nil {
-           let range = normalized.range(of: pattern, options: .regularExpression)!
-           return Double(String(normalized[range]).replacingOccurrences(of: "¥", with: "").replacingOccurrences(of: "￥", with: "").replacingOccurrences(of: " ", with: ""))
-       }
-       return nil
-     }
+      private func extractSignedAmountAnywhere(in text: String) -> Double? {
+        amountTokens(in: text).compactMap(parseAmountToken).first(where: { $0 < 0 || text.contains("+") })
+      }
+
+      private func extractListAmount(from text: String) -> Double? {
+        if let signed = extractSignedAmountAnywhere(in: text) { return signed }
+        if text.contains("¥") || text.contains("￥") {
+          return extractCurrency(from: text)
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.range(of: #"^[+-]?\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil else { return nil }
+        return Double(trimmed)
+      }
+
+      private func extractListAmountAnywhere(in text: String) -> Double? {
+        if let signed = extractSignedAmountAnywhere(in: text) { return signed }
+        if let amount = extractListAmount(from: text) { return amount }
+        // Some bank/WeChat lists render an unsigned amount with a middle dot
+        // instead of a currency symbol (for example “·22.00”). It is safe to
+        // accept that token here because the caller already found a transaction
+        // title/date neighbourhood; plain dates and IDs do not contain this
+        // amount marker.
+        if text.range(of: #"[·•∙﹒]\s*\d+(?:[\.:]\d{1,2})"#, options: .regularExpression) != nil {
+          return extractCurrency(from: text)
+        }
+        return nil
+      }
+
+      /// 提取行内所有可能的金额。没有货币符号时要求带小数点，避免把日期、
+      /// 卡号和订单号当成金额；带 ¥/￥ 的整数金额仍然可以识别。
+      private func amountTokens(in text: String) -> [String] {
+        let normalized = normalizedAmountText(text)
+        let pattern = #"[¥￥]?\s*[-+]?\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?|[-+]?\s*[¥￥]\s*(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(normalized.startIndex..<normalized.endIndex, in: normalized)
+        return regex.matches(in: normalized, range: range).map { match in
+          (normalized as NSString).substring(with: match.range)
+        }.filter { token in
+          let compact = token.replacingOccurrences(of: " ", with: "")
+          return compact.contains("¥") || compact.contains("￥") || compact.contains(".")
+        }
+      }
+
+      private func parseAmountToken(_ token: String) -> Double? {
+        let compact = token
+          .replacingOccurrences(of: "¥", with: "")
+          .replacingOccurrences(of: "￥", with: "")
+          .replacingOccurrences(of: ",", with: "")
+          .replacingOccurrences(of: " ", with: "")
+        guard let value = Double(compact), value.isFinite else { return nil }
+        return value
+      }
 
      private func normalizedAmountText(_ text: String) -> String {
-       text.replacingOccurrences(of: ",", with: "")
+        var normalized = text.replacingOccurrences(of: ",", with: "")
          .replacingOccurrences(of: "−", with: "-")
          .replacingOccurrences(of: "‑", with: "-")
-         .replacingOccurrences(of: "–", with: "-")
-         .replacingOccurrences(of: "—", with: "-")
-     }
+          .replacingOccurrences(of: "–", with: "-")
+          .replacingOccurrences(of: "—", with: "-")
+          .replacingOccurrences(of: "﹣", with: "-")
+          .replacingOccurrences(of: "－", with: "-")
+          .replacingOccurrences(of: "．", with: ".")
+          .replacingOccurrences(of: "０", with: "0")
+          .replacingOccurrences(of: "１", with: "1")
+          .replacingOccurrences(of: "２", with: "2")
+          .replacingOccurrences(of: "３", with: "3")
+          .replacingOccurrences(of: "４", with: "4")
+          .replacingOccurrences(of: "５", with: "5")
+          .replacingOccurrences(of: "６", with: "6")
+          .replacingOccurrences(of: "７", with: "7")
+          .replacingOccurrences(of: "８", with: "8")
+          .replacingOccurrences(of: "９", with: "9")
+        normalized = normalized.replacingOccurrences(of: "：", with: ":")
+        // Payment screenshots often render the decimal separator as a colon
+        // (¥21:00) or a middle dot (·22.00 / -·6.00). Only normalize when the
+        // punctuation is adjacent to digits, so labels such as “时间：” remain
+        // unaffected.
+        normalized = normalized.replacingOccurrences(
+          of: #"(?<=\d):(?=\d{1,2}(?:\D|$))"#,
+          with: ".",
+          options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+          of: #"(?<!\d)[·•∙﹒](?=\d)"#,
+          with: "",
+          options: .regularExpression
+        )
+        normalized = normalized.replacingOccurrences(
+          of: #"(?<=\d)[·•∙﹒](?=\d)"#,
+          with: ".",
+          options: .regularExpression
+        )
+        return normalized
+      }
 
      private func cleanListTitle(_ text: String) -> String {
        text
+          .replacingOccurrences(of: "·", with: " ")
+          .replacingOccurrences(of: "•", with: " ")
+          .replacingOccurrences(of: "∙", with: " ")
           .replacingOccurrences(of: #"\s*[¥￥]?[-+‑−]\s*\d+(?:\.\d{1,2})?\s*"#, with: " ", options: .regularExpression)
+          .replacingOccurrences(of: #"\s*[¥￥]?\d+\.\d{1,2}\s*"#, with: " ", options: .regularExpression)
           .replacingOccurrences(of: #"零钱余额\s*\d+(?:\.\d{1,2})?"#, with: "", options: .regularExpression)
           .replacingOccurrences(of: #"^\d{4}年\d{1,2}月\s*"#, with: "", options: .regularExpression)
           .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
@@ -662,14 +902,18 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
          !isNoiseLine(line) &&
          !detailFieldLabels.contains(line) &&
          line.range(of: #"[\u4e00-\u9fffA-Za-z]"#, options: .regularExpression) != nil &&
-         !["账单", "零钱明细", "账单服务", "支付成功"].contains(line)
+         !["账单", "零钱明细", "账单服务", "支付成功", "交易明细", "账单详情", "已入账"].contains(line)
        })
      }
 
      private func preferredDetailTitle(fieldMap: [String: String], lines: [String], merchant: String?) -> String? {
        // 标题统一遵循“商品名称优先、对方账户兜底”，避免把支付状态或页面标题误当流水标题。
        for key in ["商品名称", "商品", "商品说明", "商品详情", "商品信息"] {
-         guard let product = fieldMap[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+         let continuation = detailValueLines(for: key, lines: lines)
+         let rawProduct = continuation.isEmpty ? fieldMap[key] : continuation.joined(separator: " ")
+         guard let product = rawProduct?
+                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                 .trimmingCharacters(in: .whitespacesAndNewlines),
                !product.isEmpty,
                !detailFieldLabels.contains(product),
                !product.contains("商户全称"),
@@ -677,6 +921,47 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
          return product
        }
        return merchant
+     }
+
+     /// 详情页的商品名称可能被 OCR 拆成多行。合并字段后的连续文本，
+     /// 保留商品名内部的单个空格，并在遇到下一个字段时停止。
+     private func detailValueLines(for key: String, lines: [String]) -> [String] {
+       guard let index = lines.firstIndex(where: { line in
+         line == key || line.hasPrefix(key + ":") || line.hasPrefix(key + "：") || line.hasPrefix(key + " ")
+       }) else { return [] }
+
+       var values: [String] = []
+       let labelLine = lines[index]
+       if let range = labelLine.range(of: key) {
+         let inline = labelLine[range.upperBound...]
+           .trimmingCharacters(in: .whitespacesAndNewlines)
+           .trimmingCharacters(in: CharacterSet(charactersIn: ":："))
+           .trimmingCharacters(in: .whitespacesAndNewlines)
+         if !inline.isEmpty { values.append(String(inline)) }
+       }
+
+       var next = index + 1
+       while next < lines.count {
+         let candidate = lines[next]
+         let isNextField = detailFieldLabels.contains { label in
+           candidate == label || candidate.hasPrefix(label + ":") || candidate.hasPrefix(label + "：") || candidate.hasPrefix(label + " ")
+         }
+         if isNextField { break }
+         guard isTitleContinuation(candidate) else { break }
+         values.append(candidate)
+         next += 1
+       }
+       return values
+     }
+
+     private func isTitleContinuation(_ line: String) -> Bool {
+       let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+       guard value.count > 1,
+             !detailFieldLabels.contains(value),
+             !isNoiseLine(value),
+             !containsCalendarDate(value),
+             amountTokens(in: value).isEmpty else { return false }
+       return !value.contains("支付成功") && !value.contains("已入账") && !value.contains("账单服务")
      }
 
      private func extractPaymentMethod(fieldMap: [String: String], lines: [String]) -> String? {
@@ -723,12 +1008,43 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
          }
      }
 
-     private func isListDateLine(_ line: String) -> Bool {
-       line.range(of: #"^(?:\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}|\d{2}-\d{2}\s+\d{1,2}:\d{2})"#, options: .regularExpression) != nil
+      private func isListDateLine(_ line: String) -> Bool {
+       line.range(of: #"^(?:今天|昨天|前天)\s*\d{1,2}:\d{2}$|(?:\d{1,2}月\d{1,2}日(?:\s+\d{1,2}:\d{2})?|\d{2}-\d{2}(?:\s*\d{1,2}:\d{2})?)$"#, options: .regularExpression) != nil
+       || line.range(of: #"^[A-Za-z]{3}\s+\d{1,2},\s+\d{4}(?:\s+at\s+\d{1,2}:\d{2})?$"#, options: .regularExpression) != nil
      }
 
      private func extractDate(from text: String?) -> Date? {
        guard let text else { return nil }
+       // OCR 常把日期和时间拆成相邻的两个文本块；先跨空白合并解析。
+       // 也可能把时间冒号识别成句点，且字段值嵌在整段 OCR 文本中。
+       if let regex = try? NSRegularExpression(
+         pattern: #"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?\s+(\d{1,2})[\.:](\d{2})(?:[\.:](\d{2}))?"#
+       ),
+       let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) {
+         let ns = text as NSString
+         var comps = DateComponents()
+         comps.year = Int(ns.substring(with: match.range(at: 1)))
+         comps.month = Int(ns.substring(with: match.range(at: 2)))
+         comps.day = Int(ns.substring(with: match.range(at: 3)))
+         comps.hour = Int(ns.substring(with: match.range(at: 4)))
+         comps.minute = Int(ns.substring(with: match.range(at: 5)))
+         comps.second = match.range(at: 6).location == NSNotFound ? 0 : Int(ns.substring(with: match.range(at: 6)))
+         if let date = Calendar.current.date(from: comps) { return date }
+       }
+       if let regex = try? NSRegularExpression(
+         pattern: #"(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})(?::(\d{2}))?"#
+       ),
+       let match = regex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) {
+         let ns = text as NSString
+         var comps = DateComponents()
+         comps.year = Int(ns.substring(with: match.range(at: 1)))
+         comps.month = Int(ns.substring(with: match.range(at: 2)))
+         comps.day = Int(ns.substring(with: match.range(at: 3)))
+         comps.hour = Int(ns.substring(with: match.range(at: 4)))
+         comps.minute = Int(ns.substring(with: match.range(at: 5)))
+         comps.second = match.range(at: 6).location == NSNotFound ? 0 : Int(ns.substring(with: match.range(at: 6)))
+         if let date = Calendar.current.date(from: comps) { return date }
+       }
        let formats = [
          "yyyy年M月d日 HH:mm:ss",
          "yyyy年M月d日 HH:mm",
@@ -757,6 +1073,58 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return nil
      }
 
+     /// 从流水正文中提取交易时间。这里要求出现日历日期，绝不接受只有“21:14”
+     /// 这种状态栏时间；优先使用带字段名的值，再扫描正文。
+     private func extractTransactionDate(preferredValues: [String?], lines: [String]) -> Date? {
+       let values = preferredValues.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+         .filter { !$0.isEmpty }
+
+       for value in values where containsCalendarDate(value) {
+         if let date = extractDate(from: value) { return date }
+         if let date = parseDateOnly(value) { return date }
+       }
+
+       for index in lines.indices where containsCalendarDate(lines[index]) {
+         let line = lines[index]
+         // Vision 有时会把日期和时钟拆成相邻文本块；两者都来自正文时再合并。
+         var dateText = line
+         if index + 1 < lines.count, isStandaloneClockTime(lines[index + 1]) {
+           dateText += " " + lines[index + 1]
+         }
+         if let date = extractDate(from: dateText) { return date }
+         if let date = parseDateOnly(line) { return date }
+         if let date = parseListDate(
+           line,
+           fallbackYear: Calendar.current.component(.year, from: Date()),
+           monthOverride: Calendar.current.component(.month, from: Date())
+         ) { return date }
+       }
+       return nil
+     }
+
+     private func isStandaloneClockTime(_ text: String) -> Bool {
+       text.trimmingCharacters(in: .whitespacesAndNewlines)
+         .range(of: #"^\d{1,2}[\.:]\d{2}(?::\d{2})?$"#, options: .regularExpression) != nil
+     }
+
+     private func containsCalendarDate(_ text: String) -> Bool {
+       text.range(of: #"(?:\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}|\d{1,2}月\s*\d{1,2}日|\d{2}-\d{2}|[A-Za-z]{3}\s+\d{1,2},\s*\d{4})"#, options: .regularExpression) != nil
+     }
+
+     private func parseDateOnly(_ text: String) -> Date? {
+       let formats = ["yyyy年M月d日", "yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd"]
+       for format in formats {
+         let formatter = DateFormatter()
+         formatter.locale = Locale(identifier: "zh_CN")
+         formatter.timeZone = .current
+         formatter.dateFormat = format
+         if let date = formatter.date(from: text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+           return date
+         }
+       }
+       return nil
+     }
+
      private func extractMonthHeader(from line: String) -> Int? {
        let regex = try? NSRegularExpression(pattern: #"^(\d{4})年(\d{1,2})月#"#)
        let ns = line as NSString
@@ -767,9 +1135,37 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return Int(ns.substring(with: match.range(at: 2)))
      }
 
-     private func parseListDate(_ line: String, fallbackYear: Int, monthOverride: Int) -> Date? {
-       if let alipayDate = parseAlipayListDate(line, fallbackYear: fallbackYear) { return alipayDate }
-       let regex = try? NSRegularExpression(pattern: #"^(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})#"#)
+      private func parseListDate(_ line: String, fallbackYear: Int, monthOverride: Int) -> Date? {
+        if let alipayDate = parseAlipayListDate(line, fallbackYear: fallbackYear) { return alipayDate }
+        if let match = line.range(of: #"^(今天|昨天|前天)\s+(\d{1,2}):(\d{2})$"#, options: .regularExpression) {
+          let parts = String(line[match]).components(separatedBy: CharacterSet(charactersIn: " :"))
+          let offset = parts.first == "今天" ? 0 : (parts.first == "昨天" ? -1 : -2)
+          var date = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+          var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+          comps.hour = Int(parts.dropFirst().first ?? "12") ?? 12
+          comps.minute = Int(parts.last ?? "0") ?? 0
+          date = Calendar.current.date(from: comps) ?? date
+          return date
+        }
+        if let regex = try? NSRegularExpression(pattern: #"^(\d{2})-(\d{2})(?:\s+(\d{1,2}):(\d{2}))?$"#),
+           let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) {
+          let ns = line as NSString
+          var comps = DateComponents()
+          comps.year = fallbackYear
+          comps.month = Int(ns.substring(with: match.range(at: 1))) ?? monthOverride
+          comps.day = Int(ns.substring(with: match.range(at: 2))) ?? 1
+          comps.hour = match.range(at: 3).location == NSNotFound ? 12 : (Int(ns.substring(with: match.range(at: 3))) ?? 12)
+          comps.minute = match.range(at: 4).location == NSNotFound ? 0 : (Int(ns.substring(with: match.range(at: 4))) ?? 0)
+          return Calendar.current.date(from: comps)
+        }
+        for format in ["MMM d, yyyy 'at' H:mm", "MMM d, yyyy"] {
+          let formatter = DateFormatter()
+          formatter.locale = Locale(identifier: "en_US_POSIX")
+          formatter.timeZone = .current
+          formatter.dateFormat = format
+          if let date = formatter.date(from: line) { return date }
+        }
+        let regex = try? NSRegularExpression(pattern: #"^(\d{1,2})月(\d{1,2})日(?:\s+(\d{1,2}):(\d{2}))?$"#)
        let ns = line as NSString
        guard let match = regex?.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
        match.numberOfRanges == 5 else {
@@ -777,8 +1173,8 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        }
        let month = Int(ns.substring(with: match.range(at: 1))) ?? monthOverride
        let day = Int(ns.substring(with: match.range(at: 2))) ?? 1
-       let hour = Int(ns.substring(with: match.range(at: 3))) ?? 0
-       let minute = Int(ns.substring(with: match.range(at: 4))) ?? 0
+       let hour = match.range(at: 3).location == NSNotFound ? 12 : (Int(ns.substring(with: match.range(at: 3))) ?? 12)
+       let minute = match.range(at: 4).location == NSNotFound ? 0 : (Int(ns.substring(with: match.range(at: 4))) ?? 0)
        var comps = DateComponents()
        comps.year = fallbackYear
        comps.month = month
@@ -790,19 +1186,32 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
 
      private func isTransactionTitleLine(_ line: String) -> Bool {
        guard line.range(of: #"[\u4e00-\u9fffA‑Za‑z]"#, options: .regularExpression) != nil else { return false }
-       if extractMonthHeader(from: line) != nil && extractSignedAmountAnywhere(in: line) == nil { return false }
-       return !isNoiseLine(line) && !isBalanceLine(line) && (!line.contains("年") || extractSignedAmountAnywhere(in: line) != nil)
+        if extractMonthHeader(from: line) != nil && extractListAmountAnywhere(in: line) == nil { return false }
+        let nonTitleLabels = ["其他", "餐饮美食", "日用百货", "保险", "交通出行", "爱车养车", "退款", "支出", "收入", "天猫", "淘宝", "支付宝", "微信", "微信支付", "银行卡"]
+        if nonTitleLabels.contains(line) { return false }
+        return !isNoiseLine(line) && !isBalanceLine(line) && (!line.contains("年") || extractListAmountAnywhere(in: line) != nil)
      }
 
      private func normalizeListMerchant(_ title: String) -> String? {
+       func transferName(_ value: String?) -> String? {
+         guard let value else { return nil }
+         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+         return trimmed.hasPrefix("给") ? String(trimmed.dropFirst()) : trimmed
+       }
+       if title.contains("付款-") {
+         return transferName(title.components(separatedBy: "付款-").last)
+       }
+       if title.contains("-给") {
+         return transferName(title.components(separatedBy: "-给").last)
+       }
        if title.contains("付款‑") {
-         return title.components(separatedBy: "付款‑").last
+         return transferName(title.components(separatedBy: "付款‑").last)
        }
        if title.contains("转给") {
-         return title.components(separatedBy: "转给").last
+         return transferName(title.components(separatedBy: "转给").last)
        }
        if title.contains("‑给") {
-         return title.components(separatedBy: "‑给").last
+         return transferName(title.components(separatedBy: "‑给").last)
        }
        return title
      }
@@ -876,7 +1285,7 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
 
      private func extractSimpleMonthHeader(from line: String) -> Int? {
        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-       let pattern = #"^(\d{1,2})月(?:[., … : ]*)$"#
+       let pattern = #"^(\d{1,2})月(?:[.,，。、、 … :： ]*)$"#
        let ns = trimmed as NSString
        if let regex = try? NSRegularExpression(pattern: pattern),
          let match = regex.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)),
@@ -896,9 +1305,9 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        return nil
      }
 
-     private func isAlipayDateLine(_ line: String) -> Bool {
-       line.range(of: #"^\d{2}-\d{2}\s+\d{2}:\d{2}$"#, options: .regularExpression) != nil
-     }
+private func isAlipayDateLine(_ line: String) -> Bool {
+    line.range(of: #"^(?:今天|昨天|前天)\s*\d{1,2}[:.]\d{2}$|^\d{2}-\d{2}(?:\s*\d{1,2}[:.]\d{2})?$"#, options: .regularExpression) != nil
+}
 
      private func nearestAlipayTitle(before index: Int, in lines: [String]) -> String? {
        guard index > 0 else { return nil }
@@ -942,6 +1351,12 @@ private func makeFieldMap(lines: [String]) -> [String: String] {
        let candidates = weChatTransferValueBlock(from: lines)
        switch label {
        case "零钱余额":
+         if let balanceIndex = lines.firstIndex(of: "零钱") {
+           let following = lines.dropFirst(balanceIndex + 1)
+           if let balance = following.first(where: { $0.range(of: #"^\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil }) {
+             return balance
+           }
+         }
          return candidates.first(where: { $0.range(of: #"^\d+(?:\.\d{1,2})$"#, options: .regularExpression) != nil })
        case "转账单号":
          return candidates.first(where: { $0.range(of: #"^\d{10,}$"#, options: .regularExpression) != nil })
@@ -1050,8 +1465,14 @@ private func buildAlipayListSections(from lines: [String]) -> [(month: Int, expe
         sections.append((month: currentMonth, expenseTotal: currentExpenseTotal, items: [], lines: currentLines))
     }
 
+    // 信用卡“我的账单”页面可能没有单独的月份标题，但仍然包含完整的
+    // 日期锚点；把整页作为一个交易区间解析，不能退化成只取月度总额。
+    if sections.isEmpty && !lines.isEmpty {
+        sections.append((month: Calendar.current.component(.month, from: Date()), expenseTotal: nil, items: [], lines: lines))
+    }
+
     return sections.map { section in
-        (month: section.month, expenseTotal: section.expenseTotal, items: parseAlipayListItems(in: section.lines,
+        (month: section.month, expenseTotal: section.expenseTotal, items: parseAlipayListItemsRobust(in: section.lines,
  expenseTotal: section.expenseTotal), lines: section.lines)
     }
 }
@@ -1085,6 +1506,105 @@ private func parseAlipayListItems(in lines: [String], expenseTotal: Double?) -> 
     return items
 }
 
+/// 按“日期锚点 + 交易块”解析列表，不假设平台固定列位置。
+private func parseAlipayListItemsRobust(in lines: [String], expenseTotal: Double?) -> [(title: String, category: String?, provider: String?, dateLine: String, amountText: String?)] {
+    let dateIndices = lines.indices.filter { isAlipayDateLine(lines[$0]) }
+    // 部分支付宝列表（尤其是“今天/昨天”样式）按“标题+金额、分类、日期”
+    // 排列，而不是把日期放在交易块前面。先识别这种相对日期布局，避免把
+    // 第一笔交易误挂到下一笔日期上。
+    let usesTrailingDate = lines.contains { $0.contains("今天") || $0.contains("昨天") || $0.contains("前天") }
+    var items: [(title: String, category: String?, provider: String?, dateLine: String, amountText: String?)] = []
+    var currentDateLine: String?
+    var currentCategory: String?
+    var currentProvider: String?
+    var pendingTitle: String?
+
+    func appendItem(title rawTitle: String, amount: String?, date: String?, category categoryOverride: String? = nil, provider providerOverride: String? = nil) {
+        let cleaned = extractInlineAmountAndCleanTitle(from: rawTitle).title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned != "退", cleaned != "收支", cleaned != "支出", cleaned != "收入" else { return }
+        items.append((title: cleaned, category: categoryOverride ?? currentCategory, provider: providerOverride ?? currentProvider, dateLine: date ?? "", amountText: amount))
+    }
+
+    var index = 0
+    while index < lines.count {
+        let line = lines[index]
+        if usesTrailingDate {
+            let inline = extractInlineAmountAndCleanTitle(from: line)
+            let splitTitle = inline.title.isEmpty
+                ? lines[max(0, index - 3)..<index].reversed().first(where: isLikelyAlipayTitleLine)
+                : inline.title
+            if let amount = inline.amountText, let title = splitTitle, !title.isEmpty {
+                let end = min(lines.count, index + 4)
+                if let dateIndex = lines[(index + 1)..<end].firstIndex(where: isAlipayDateLine) {
+                    let block = Array(lines[(index + 1)..<dateIndex])
+                    appendItem(title: title,
+                               amount: amount,
+                               date: lines[dateIndex],
+                               category: block.first(where: isLikelyAlipayCategoryLine),
+                               provider: block.first(where: isLikelyAlipayProviderLine))
+                    index = dateIndex + 1
+                    continue
+                }
+            }
+        }
+        if isAlipayDateLine(line) {
+            currentDateLine = line
+            currentCategory = nil
+            currentProvider = nil
+            pendingTitle = nil
+            index += 1
+            continue
+        }
+        guard currentDateLine != nil else { index += 1; continue }
+        if isLikelyAlipayCategoryLine(line) { currentCategory = line; index += 1; continue }
+        if isLikelyAlipayProviderLine(line) { currentProvider = line; index += 1; continue }
+
+        let inline = extractInlineAmountAndCleanTitle(from: line)
+        if let amount = inline.amountText {
+            let title = inline.title == "退" || inline.title.isEmpty ? (pendingTitle ?? line) : inline.title
+            appendItem(title: title, amount: amount, date: currentDateLine)
+            pendingTitle = nil
+            index += 1
+            continue
+        }
+
+        if isLikelyAlipayTitleLine(line) {
+            // 退款行常被 OCR 拆成“退 + 商户 + 金额”三列；“退”只是标记，
+            // 不应覆盖已经捕获的商户标题，否则第二笔退款会被丢弃。
+            if line == "退" {
+                index += 1
+                continue
+            }
+            pendingTitle = line
+            var lookahead = index + 1
+            var amount: String?
+            while lookahead < lines.count && lookahead < index + 4 && !isAlipayDateLine(lines[lookahead]) {
+                let candidate = lines[lookahead]
+                if isLikelyAlipayCategoryLine(candidate) { currentCategory = candidate }
+                else if isLikelyAlipayProviderLine(candidate) { currentProvider = candidate }
+                else if let value = extractListAmount(from: candidate) { amount = String(value); break }
+                lookahead += 1
+            }
+            if let amount {
+                appendItem(title: line, amount: amount, date: currentDateLine)
+                pendingTitle = nil
+                index = lookahead + 1
+                continue
+            }
+        }
+        index += 1
+    }
+
+    if items.isEmpty, let firstDate = dateIndices.first {
+        let after = Array(lines.dropFirst(firstDate + 1).prefix(5))
+        let title = after.first(where: isLikelyAlipayTitleLine) ?? "未命名流水"
+        let amount = after.first(where: { extractListAmount(from: $0) != nil })
+            ?? (dateIndices.count == 1 ? expenseTotal.map { String(format: "%.2f", abs($0)) } : nil)
+        items.append((title: title, category: after.first(where: isLikelyAlipayCategoryLine), provider: after.first(where: isLikelyAlipayProviderLine), dateLine: lines[firstDate], amountText: amount))
+    }
+    return items
+}
+
 private func nearestAlipayTitle(in lines: [String]) -> String? {
     lines.reversed().first { candidate in
         let cleaned = extractInlineAmountAndCleanTitle(from: candidate).title
@@ -1101,11 +1621,12 @@ private func nearestAlipayProvider(in lines: [String]) -> String? {
 }
 
 private func nearestStandaloneAmount<S: Sequence>(in lines: S) -> String? where S.Element == String {
-    lines.first { extractSignedAmount(from: $0) != nil }
+    lines.first { extractListAmount(from: $0) != nil }
 }
 
 private func isLikelyAlipayCategoryLine(_ line: String) -> Bool {
-    ["其他", "日用百货", "保险"].contains(line)
+    let categories = ["其他", "日用百货", "保险", "退款", "餐饮美食", "交通出行", "爱车养车", "餐饮", "购物", "娱乐", "学习", "生活服务"]
+    return categories.contains(where: { line == $0 || line.hasPrefix($0 + " ") || line.hasPrefix($0 + "·") })
 }
 
 private func isLikelyAlipayProviderLine(_ line: String) -> Bool {
@@ -1116,7 +1637,7 @@ private func isLikelyAlipayTitleLine(_ line: String) -> Bool {
     guard line.range(of: #"[\u4e00-\u9fffA-Za-z]"#, options: .regularExpression) != nil else { return false }
     if isAlipayDateLine(line) || extractSimpleMonthHeader(from: line) != nil { return false }
     if isLikelyAlipayCategoryLine(line) || isLikelyAlipayProviderLine(line) { return false }
-    if extractSignedAmount(from: line) != nil { return false }
+    if extractListAmount(from: line) != nil { return false }
     if line.contains("收支分析") || line.contains("等待确认收货") { return false }
     return true
 }
@@ -1129,16 +1650,32 @@ private func meaningfulAlipayListMerchant(provider: String?, title: String) -> S
 }
 
 private func extractInlineAmountAndCleanTitle(from line: String) -> (title: String, amountText: String?) {
-    if let range = line.range(of: #"[+-]?\d+(?:\.\d{1,2})"#, options: .regularExpression) {
-        let amountText = String(line[range])
-        let title = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalized = line
+        .replacingOccurrences(of: "·", with: "")
+        .replacingOccurrences(of: "•", with: "")
+        .replacingOccurrences(of: "∙", with: "")
+    if let range = normalized.range(of: #"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[\.:]\d{1,2})"#, options: .regularExpression) {
+        let amountText = String(normalized[range]).replacingOccurrences(of: ":", with: ".")
+        let title = String(normalized[..<range.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return (title, amountText)
     }
-    return (line, nil)
+    return (normalized, nil)
 }
 
 private func parseAlipayListDate(_ line: String, fallbackYear: Int) -> Date? {
-    let regex = try? NSRegularExpression(pattern: #"#(\d{2})-(\d{2})\s+(\d{2}):(\d{2})#"#)
+    if let match = try? NSRegularExpression(pattern: #"^(今天|昨天|前天)\s*(\d{1,2})[:.](\d{2})$"#)
+        .firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)) {
+        let ns = line as NSString
+        let offset = ns.substring(with: match.range(at: 1)) == "今天" ? 0 : (ns.substring(with: match.range(at: 1)) == "昨天" ? -1 : -2)
+        var date = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        comps.hour = Int(ns.substring(with: match.range(at: 2))) ?? 12
+        comps.minute = Int(ns.substring(with: match.range(at: 3))) ?? 0
+        date = Calendar.current.date(from: comps) ?? date
+        return date
+    }
+    let regex = try? NSRegularExpression(pattern: #"^(\d{2})-(\d{2})(?:\s*(\d{2})[:.](\d{2}))?$"#)
     let ns = line as NSString
     guard let match = regex?.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
           match.numberOfRanges == 5 else {
@@ -1146,8 +1683,8 @@ private func parseAlipayListDate(_ line: String, fallbackYear: Int) -> Date? {
     }
     let month = Int(ns.substring(with: match.range(at: 1))) ?? 1
     let day = Int(ns.substring(with: match.range(at: 2))) ?? 1
-    let hour = Int(ns.substring(with: match.range(at: 3))) ?? 0
-    let minute = Int(ns.substring(with: match.range(at: 4))) ?? 0
+    let hour = match.range(at: 3).location == NSNotFound ? 12 : (Int(ns.substring(with: match.range(at: 3))) ?? 12)
+    let minute = match.range(at: 4).location == NSNotFound ? 0 : (Int(ns.substring(with: match.range(at: 4))) ?? 0)
     var comps = DateComponents()
     comps.year = fallbackYear
     comps.month = month

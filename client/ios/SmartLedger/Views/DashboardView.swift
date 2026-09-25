@@ -386,7 +386,8 @@ private var summaryGrid: some View {
         LocalAnalytics.makeDistribution(
             transactions: currentWindowTransactions,
             categories: store.flattenedCategories,
-            selectedRootCategoryId: selectedDistributionRootId
+            selectedRootCategoryId: selectedDistributionRootId,
+            links: store.transactionLedgerLinks
         )
     }
 
@@ -1360,6 +1361,7 @@ var body: some View {
                 }
             }
         }
+        .dismissKeyboardWhenTappedOutside()
         .navigationTitle("时间范围")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

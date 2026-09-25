@@ -21,6 +21,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tok.smartledgerlocal
         PRODUCT_NAME: SmartLedger
+        ENABLE_TESTABILITY: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: false
         GENERATE_INFOPLIST_FILE: YES
@@ -49,5 +50,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
         PRODUCT_BUNDLE_IDENTIFIER: com.tok.smartledgerlocal.tests
+        PRODUCT_NAME: SmartLedgerTests
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: TESTING

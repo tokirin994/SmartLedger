@@ -323,6 +323,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = SmartLedger/SmartLedger.entitlements;
+				ENABLE_TESTABILITY = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = SmartLedger;
@@ -368,8 +369,10 @@
 		7372BCBDE3BF4E8ED2F3CCBC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tok.smartledgerlocal.tests;
+				PRODUCT_NAME = SmartLedgerTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = TESTING;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SmartLedger.app/SmartLedger";
 			};
@@ -378,8 +381,10 @@
 		C4BF1106CA517721A328F0B6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tok.smartledgerlocal.tests;
+				PRODUCT_NAME = SmartLedgerTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = TESTING;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SmartLedger.app/SmartLedger";
 			};

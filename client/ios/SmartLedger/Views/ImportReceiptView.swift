@@ -124,6 +124,7 @@ struct ImportReceiptView: View {
     .padding()
 }
 .appBackground()
+.scrollDismissesKeyboard(.interactively)
 .navigationTitle(importMode == .image ? "识图导入" : "文件导入")
 .toolbar {
     if !selectedImages.isEmpty || !importedFileNames.isEmpty || store.hasPendingOCRImport {
@@ -147,16 +148,21 @@ struct ImportReceiptView: View {
     importMode = oldValue
     showModeDiscardConfirmation = true
 }
-.fileImporter(
-    isPresented: $showFileImporter,
-    // Let the parser validate the extension/header so generic exports are not
-    // silently rejected by the system document picker.
-    allowedContentTypes: [.item],
-    allowsMultipleSelection: true
-) { result in
-    Task { @MainActor in
-        await importBillFiles(result)
-    }
+.sheet(isPresented: $showFileImporter) {
+    DocumentPickerView(
+        onPick: { urls in
+            // Reset the presentation state before starting any parsing work.
+            // This guarantees the picker cannot remain over the recognition UI.
+            showFileImporter = false
+            isRecognizing = true
+            Task { @MainActor in
+                await importBillFiles(.success(urls))
+            }
+        },
+        onCancel: {
+            showFileImporter = false
+        }
+    )
 }
 .onReceive(NotificationCenter.default.publisher(for: .smartLedgerDiscardOCRImport)) { _ in
     clearImportState()
@@ -681,6 +687,7 @@ private struct OCRBatchItemEditor: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("编辑识别结果")
             .navigationBarTitleDisplayMode(.inline)
             .dismissKeyboardWhenTappedOutside()
@@ -748,6 +755,44 @@ private func replaceBatchItem(_ updated: OCRImportResult) {
 }
 
 }
-// End of ImportReceiptView.
-//
-//
+
+/// Explicit document picker wrapper. Using the delegate lets us close the
+/// picker immediately for both success and cancellation, instead of relying
+/// on the presentation state callback timing of `.fileImporter`.
+private struct DocumentPickerView: UIViewControllerRepresentable {
+    let onPick: ([URL]) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+        let onCancel: () -> Void
+
+        init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            controller.dismiss(animated: true) { [onPick] in
+                onPick(urls)
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            controller.dismiss(animated: true, completion: onCancel)
+        }
+    }
+}

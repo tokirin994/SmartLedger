@@ -1,7 +1,7 @@
 import Foundation
 
 enum LocalAnalytics {
-  static func computeBudgetProgress(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem]) -> [BudgetItem] {
+  static func computeBudgetProgress(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], links: [TransactionLedgerLink] = []) -> [BudgetItem] {
     budgets.map { budget in
       let periodStart: Date
       let periodEnd: Date
@@ -26,7 +26,7 @@ enum LocalAnalytics {
       let spent = isWithinConfiguredRange ? transactions.filter { tx in
         tx.kind == .expense && tx.happenedAt >= periodStart && tx.happenedAt < periodEnd &&
         matchBudgetCategory(tx: tx, budget: budget, categories: categories)
-      }.reduce(0.0) { $0 + $1.selfShareAmount } : 0
+      }.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) } : 0
 
       let ratio = budget.limitAmount > 0 ? spent / budget.limitAmount : 0
       return BudgetItem(
@@ -46,11 +46,11 @@ enum LocalAnalytics {
     }
   }
 
-  static func makeOverview(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], start: Date, end: Date, granularity: Granularity) -> AnalyticsOverview {
-    let totalIncome = transactions.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.selfShareAmount }
-    let totalExpense = transactions.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.selfShareAmount }
-    let trend = makeTrend(transactions: transactions, granularity: granularity)
-    let distribution = makeDistribution(transactions: transactions, categories: categories)
+  static func makeOverview(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], start: Date, end: Date, granularity: Granularity, links: [TransactionLedgerLink] = []) -> AnalyticsOverview {
+    let totalIncome = transactions.filter { $0.kind == .income }.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) }
+    let totalExpense = transactions.filter { $0.kind == .expense }.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) }
+    let trend = makeTrend(transactions: transactions, granularity: granularity, links: links)
+    let distribution = makeDistribution(transactions: transactions, categories: categories, links: links)
     return AnalyticsOverview(
       start: start.apiDateString,
       end: end.apiDateString,
@@ -59,11 +59,11 @@ enum LocalAnalytics {
       balance: totalIncome - totalExpense,
       distribution: distribution,
       trend: trend,
-      budgets: computeBudgetProgress(transactions: transactions, categories: categories, budgets: budgets)
+      budgets: computeBudgetProgress(transactions: transactions, categories: categories, budgets: budgets, links: links)
     )
   }
 
-  static func makeCategoryTrend(transactions: [LedgerTransaction], categories: [LedgerCategory], start: Date, end: Date, granularity: Granularity, flowType: FlowType) -> CategoryTrendResponse {
+  static func makeCategoryTrend(transactions: [LedgerTransaction], categories: [LedgerCategory], start: Date, end: Date, granularity: Granularity, flowType: FlowType, links: [TransactionLedgerLink] = []) -> CategoryTrendResponse {
     let filtered = transactions.filter { $0.kind == flowType }
     let labels = Array(Set(filtered.map { granularityLabel(for: $0.happenedAt, granularity: granularity) })).sorted()
     var bucket: [String: [String: Double]] = [:]
@@ -71,8 +71,9 @@ enum LocalAnalytics {
     for tx in filtered {
       let label = granularityLabel(for: tx.happenedAt, granularity: granularity)
       let categoryName = rootCategoryName(for: tx, categories: categories)
-      bucket[categoryName, default: [:]][label, default: 0] += tx.selfShareAmount
-      totals[categoryName, default: 0] += tx.selfShareAmount
+      let share = selfShareAmount(for: tx, links: links)
+      bucket[categoryName, default: [:]][label, default: 0] += share
+      totals[categoryName, default: 0] += share
     }
     let top = totals.sorted { $0.value > $1.value }.prefix(8).map { $0.key }
     let series = top.map { name in
@@ -81,12 +82,13 @@ enum LocalAnalytics {
     return CategoryTrendResponse(category: flowType.title, labels: labels, series: series)
   }
 
-  private static func makeTrend(transactions: [LedgerTransaction], granularity: Granularity) -> [TrendPoint] {
+  private static func makeTrend(transactions: [LedgerTransaction], granularity: Granularity, links: [TransactionLedgerLink]) -> [TrendPoint] {
     var bucket: [String: (income: Double, expense: Double)] = [:]
     for tx in transactions {
       let label = granularityLabel(for: tx.happenedAt, granularity: granularity)
       var current = bucket[label] ?? (0, 0)
-      if tx.kind == .income { current.income += tx.selfShareAmount } else { current.expense += tx.selfShareAmount }
+      let share = selfShareAmount(for: tx, links: links)
+      if tx.kind == .income { current.income += share } else { current.expense += share }
       bucket[label] = current
     }
     return bucket.keys.sorted().map { label in
@@ -95,33 +97,33 @@ enum LocalAnalytics {
     }
   }
 
-  static func makeDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], selectedRootCategoryId: Int? = nil) -> [DistributionPoint] {
+  static func makeDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], selectedRootCategoryId: Int? = nil, links: [TransactionLedgerLink] = []) -> [DistributionPoint] {
     let expenseTransactions = transactions.filter { $0.kind == .expense }
     guard !expenseTransactions.isEmpty else { return [] }
 
     if let selectedRootCategoryId = selectedRootCategoryId {
-      return makeChildDistribution(transactions: expenseTransactions, categories: categories, rootCategoryId: selectedRootCategoryId)
+      return makeChildDistribution(transactions: expenseTransactions, categories: categories, rootCategoryId: selectedRootCategoryId, links: links)
     }
 
-    let totalExpense = expenseTransactions.reduce(0.0) { $0 + $1.selfShareAmount }
-    return makeRootDistribution(transactions: expenseTransactions, categories: categories, totalExpense: totalExpense)
+    let totalExpense = expenseTransactions.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) }
+    return makeRootDistribution(transactions: expenseTransactions, categories: categories, totalExpense: totalExpense, links: links)
   }
 
-  private static func makeRootDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], totalExpense: Double) -> [DistributionPoint] {
+  private static func makeRootDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], totalExpense: Double, links: [TransactionLedgerLink]) -> [DistributionPoint] {
     guard totalExpense > 0 else { return [] }
     var bucket: [String: (amount: Double, color: String?)] = [:]
     for tx in transactions {
       let name = rootCategoryName(for: tx, categories: categories)
       let color = rootCategoryColor(for: tx, categories: categories)
       let current = bucket[name] ?? (0, color)
-      bucket[name] = (current.amount + tx.selfShareAmount, color)
+      bucket[name] = (current.amount + selfShareAmount(for: tx, links: links), color)
     }
     return bucket.map { key, value in
       DistributionPoint(category: key, amount: value.amount, ratio: value.amount / totalExpense, color: value.color)
     }.sorted { $0.amount > $1.amount }
   }
 
-  private static func makeChildDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], rootCategoryId: Int) -> [DistributionPoint] {
+  private static func makeChildDistribution(transactions: [LedgerTransaction], categories: [LedgerCategory], rootCategoryId: Int, links: [TransactionLedgerLink]) -> [DistributionPoint] {
     guard let rootCategory = categories.first(where: { $0.id == rootCategoryId && $0.parentId == nil }) else { return [] }
     let hasChildren = categories.contains { $0.parentId == rootCategoryId }
 
@@ -146,7 +148,7 @@ enum LocalAnalytics {
       let childColor = rootCategory.color
 
       let current = bucket[childName] ?? (0, childColor)
-      bucket[childName] = (current.amount + tx.selfShareAmount, childColor)
+      bucket[childName] = (current.amount + selfShareAmount(for: tx, links: links), childColor)
     }
 
     let totalExpense = bucket.values.reduce(0.0) { $0 + $1.amount }
@@ -216,6 +218,18 @@ enum LocalAnalytics {
     let path = current.name.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
     guard let rootName = path.first else { return current }
     return all.first(where: { $0.parentId == nil && $0.name == rootName }) ?? current
+  }
+
+  private static func selfShareAmount(for transaction: LedgerTransaction, links: [TransactionLedgerLink]) -> Double {
+    guard !links.isEmpty else { return transaction.selfShareAmount }
+    let candidates = links.filter { $0.transactionId == transaction.id }.sorted { $0.ledgerId < $1.ledgerId }
+    guard let link = candidates.first else {
+      // Unbound transactions continue to use the legacy split fields.
+      return transaction.selfShareAmount
+    }
+    guard link.includeInStatistics else { return 0 }
+    guard link.splitEnabled, !link.splitParticipantIds.isEmpty else { return transaction.amount }
+    return link.selfShareAmount(for: transaction.amount) ?? transaction.selfShareAmount
   }
 
   private static func granularityLabel(for date: Date, granularity: Granularity) -> String {

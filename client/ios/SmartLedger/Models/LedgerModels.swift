@@ -421,6 +421,99 @@ struct BookParticipant: Codable, Identifiable, Hashable, Sendable {
     let name: String
 }
 
+/// Describes how a transaction is associated with a ledger.  The association
+/// is intentionally separate from `LedgerTransaction` so one transaction can
+/// be included in multiple ledgers with independent split/statistics settings.
+enum TransactionLedgerLinkSource: String, Codable, Sendable {
+    case manual
+    case autoCollect
+    case recommended
+}
+
+enum TransactionSplitMode: String, Codable, Sendable {
+    case equal
+    case ratio
+    case fixed
+}
+
+struct LedgerParticipantSnapshot: Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+}
+
+struct TransactionLedgerLink: Codable, Identifiable, Hashable, Sendable {
+    /// A stable value such as `tx-123-book-4` is used during migration. It
+    /// avoids duplicate links when an older snapshot is opened more than once.
+    let id: String
+    let transactionId: Int
+    let ledgerId: Int
+    let source: TransactionLedgerLinkSource
+    var includeInStatistics: Bool
+    var splitEnabled: Bool
+    var payerParticipantId: String?
+    var splitParticipantIds: [String]
+    var splitParticipantNames: [String]
+    var splitMode: TransactionSplitMode
+    var splitRatio: Double?
+    var splitAmount: Double?
+    var participantSnapshot: [LedgerParticipantSnapshot]
+    var configVersion: Int
+    var needsReview: Bool
+    var isSplitCustomized: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, source
+        case transactionId = "transaction_id"
+        case ledgerId = "ledger_id"
+        case includeInStatistics = "include_in_statistics"
+        case splitEnabled = "split_enabled"
+        case payerParticipantId = "payer_participant_id"
+        case splitParticipantIds = "split_participant_ids"
+        case splitParticipantNames = "split_participant_names"
+        case splitMode = "split_mode"
+        case splitRatio = "split_ratio"
+        case splitAmount = "split_amount"
+        case participantSnapshot = "participant_snapshot"
+        case configVersion = "config_version"
+        case needsReview = "needs_review"
+        case isSplitCustomized = "is_split_customized"
+    }
+
+    init(id: String, transactionId: Int, ledgerId: Int, source: TransactionLedgerLinkSource = .manual, includeInStatistics: Bool = true, splitEnabled: Bool = false, payerParticipantId: String? = nil, splitParticipantIds: [String] = [], splitParticipantNames: [String] = [], splitMode: TransactionSplitMode = .equal, splitRatio: Double? = nil, splitAmount: Double? = nil, participantSnapshot: [LedgerParticipantSnapshot] = [], configVersion: Int = 1, needsReview: Bool = false, isSplitCustomized: Bool = false) {
+        self.id = id
+        self.transactionId = transactionId
+        self.ledgerId = ledgerId
+        self.source = source
+        self.includeInStatistics = includeInStatistics
+        self.splitEnabled = splitEnabled
+        self.payerParticipantId = payerParticipantId
+        self.splitParticipantIds = splitParticipantIds
+        self.splitParticipantNames = splitParticipantNames
+        self.splitMode = splitMode
+        self.splitRatio = splitRatio
+        self.splitAmount = splitAmount
+        self.participantSnapshot = participantSnapshot
+        self.configVersion = configVersion
+        self.needsReview = needsReview
+        self.isSplitCustomized = isSplitCustomized
+    }
+
+    func selfShareAmount(for amount: Double) -> Double? {
+        guard splitEnabled else { return nil }
+        guard !splitParticipantIds.isEmpty else { return nil }
+        guard splitParticipantIds.contains("我") || splitParticipantNames.contains("我") else { return 0 }
+        switch splitMode {
+        case .equal:
+            return amount / Double(splitParticipantIds.count)
+        case .ratio:
+            guard let ratio = splitRatio else { return amount / Double(splitParticipantIds.count) }
+            return amount * (ratio > 1 ? ratio / 100 : ratio)
+        case .fixed:
+            return splitAmount ?? amount / Double(splitParticipantIds.count)
+        }
+    }
+}
+
 enum CloudSyncState: String { case disabled, idle, syncing, success, unavailable, conflict, failed
     var title: String { self == .disabled ? "未启用" : self == .idle ? "等待同步" : self == .syncing ? "同步中" : self == .success ? "已同步" : self == .unavailable ? "iCloud 不可用" : self == .conflict ? "需要选择版本" : "失败" }
 }

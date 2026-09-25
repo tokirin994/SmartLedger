@@ -12,6 +12,7 @@ struct BudgetView: View {
       }
       .padding()
     }
+    .scrollDismissesKeyboard(.interactively)
     .navigationTitle("预算")
     .dismissKeyboardWhenTappedOutside()
 
@@ -223,6 +224,7 @@ private struct CreateBudgetView: View {
          }
        }
      }
+     .scrollDismissesKeyboard(.interactively)
      .navigationTitle("新建预算")
      .dismissKeyboardWhenTappedOutside()
      .toolbar {

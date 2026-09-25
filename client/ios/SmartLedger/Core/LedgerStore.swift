@@ -6,6 +6,10 @@ final class LedgerStore: ObservableObject {
     @Published var categories: [LedgerCategory] = []
     @Published var books: [LedgerBook] = []
     @Published var transactions: [LedgerTransaction] = []
+    /// Per-ledger transaction associations. Legacy book fields on a
+    /// transaction remain populated for compatibility, but this collection is
+    /// the durable source for ledger membership and per-ledger split settings.
+    @Published var transactionLedgerLinks: [TransactionLedgerLink] = []
     @Published var overview: AnalyticsOverview?
     @Published var budgets: [BudgetItem] = []
     @Published var parsedImport: OCRImportResult?
@@ -98,6 +102,10 @@ final class LedgerStore: ObservableObject {
             try? await persistLocalSnapshot(markUpdatedAt: true)
         }
 
+        if migrateTransactionLedgerLinksIfNeeded() {
+            try? await persistLocalSnapshot(markUpdatedAt: true)
+        }
+
         refreshDerivedData()
 
         if cloudSyncEnabled {
@@ -130,14 +138,15 @@ final class LedgerStore: ObservableObject {
 
     private func refreshDashboard(window: DateWindow, granularity: Granularity) async {
         let filtered = allTransactions(in: window)
-        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets)
+        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets, links: transactionLedgerLinks)
         overview = LocalAnalytics.makeOverview(
             transactions: filtered,
             categories: flattenedCategories,
             budgets: budgets,
             start: window.start,
             end: window.end,
-            granularity: granularity
+            granularity: granularity,
+            links: transactionLedgerLinks
         )
         categoryTrend = LocalAnalytics.makeCategoryTrend(
             transactions: filtered,
@@ -145,7 +154,8 @@ final class LedgerStore: ObservableObject {
             start: window.start,
             end: window.end,
             granularity: granularity,
-            flowType: .expense
+            flowType: .expense,
+            links: transactionLedgerLinks
         )
     }
 
@@ -426,6 +436,9 @@ final class LedgerStore: ObservableObject {
 
             transactions.removeAll { $0.id == existing.id }
             transactions.append(contentsOf: installmentRows)
+            for row in installmentRows {
+                updateLedgerLinks(from: row, bookIDs: resolvedBooks.map(\.id))
+            }
             nextTransactionId += max(months - 1, 0)
             synchronizeLinkedOffsets(sourceID: existing.id, with: installmentRows[0])
             transactions.sort { $0.happenedAt > $1.happenedAt }
@@ -467,6 +480,7 @@ final class LedgerStore: ObservableObject {
         )
 
         synchronizeLinkedOffsets(sourceID: existing.id, with: transactions[existingIndex])
+        updateLedgerLinks(from: transactions[existingIndex], bookIDs: resolvedBooks.map(\.id))
 
         transactions.sort { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
@@ -1486,16 +1500,92 @@ final class LedgerStore: ObservableObject {
         return true
     }
 
+    /// Keeps the new association table in sync with legacy transaction fields
+    /// while older screens and import/export formats still use those fields.
+    /// The operation is idempotent and preserves a manually customised link's
+    /// split configuration.
+    @discardableResult
+    private func migrateTransactionLedgerLinksIfNeeded() -> Bool {
+        var changed = false
+        var byKey = Dictionary(transactionLedgerLinks.map { ("\($0.transactionId)-\($0.ledgerId)", $0) }, uniquingKeysWith: { _, newest in newest })
+        var validKeys = Set<String>()
+        for transaction in transactions {
+            let bookIDs = Array(Set(transaction.bookIds + (transaction.bookId.map { [$0] } ?? []))).filter { $0 > 0 }
+            for bookID in bookIDs {
+                guard let book = books.first(where: { $0.id == bookID }) else { continue }
+                let key = "\(transaction.id)-\(bookID)"
+                validKeys.insert(key)
+                let source: TransactionLedgerLinkSource = book.autoCollectEnabled && shouldAutoCollect(into: book, date: transaction.happenedAt, categoryId: transaction.categoryId, kind: transaction.kind) ? .autoCollect : .manual
+                let snapshot = book.participants.map { LedgerParticipantSnapshot(id: $0.id, name: $0.name) }
+                if var existing = byKey[key] {
+                    if !existing.isSplitCustomized {
+                        existing.splitEnabled = !transaction.splitParticipantIds.isEmpty || book.splitEnabled
+                        existing.payerParticipantId = transaction.paidByParticipantId
+                        existing.splitParticipantIds = transaction.splitParticipantIds.isEmpty && book.splitEnabled ? [book.participants.first(where: { $0.name == "我" })?.id ?? "我"] : transaction.splitParticipantIds
+                        existing.splitParticipantNames = transaction.splitParticipantNames.isEmpty && book.splitEnabled ? [book.participants.first(where: { $0.name == "我" })?.name ?? "我"] : transaction.splitParticipantNames
+                    }
+                    existing.includeInStatistics = true
+                    existing.participantSnapshot = snapshot
+                    byKey[key] = existing
+                    if !transactionLedgerLinks.contains(existing) { changed = true }
+                } else {
+                    let ids = transaction.splitParticipantIds.isEmpty && book.splitEnabled ? [book.participants.first(where: { $0.name == "我" })?.id ?? "我"] : transaction.splitParticipantIds
+                    let names = transaction.splitParticipantNames.isEmpty && book.splitEnabled ? [book.participants.first(where: { $0.name == "我" })?.name ?? "我"] : transaction.splitParticipantNames
+                    byKey[key] = TransactionLedgerLink(
+                        id: "tx-\(transaction.id)-book-\(bookID)", transactionId: transaction.id, ledgerId: bookID,
+                        source: source, includeInStatistics: true, splitEnabled: !ids.isEmpty,
+                        payerParticipantId: transaction.paidByParticipantId,
+                        splitParticipantIds: ids, splitParticipantNames: names,
+                        splitMode: .equal, participantSnapshot: snapshot
+                    )
+                    changed = true
+                }
+            }
+        }
+        let filtered = byKey.values.filter { validKeys.contains("\($0.transactionId)-\($0.ledgerId)") }.sorted { $0.id < $1.id }
+        if filtered != transactionLedgerLinks {
+            transactionLedgerLinks = filtered
+            changed = true
+        }
+        return changed
+    }
+
+    private func updateLedgerLinks(from transaction: LedgerTransaction, bookIDs: [Int]) {
+        guard !bookIDs.isEmpty else { return }
+        for index in transactionLedgerLinks.indices where transactionLedgerLinks[index].transactionId == transaction.id && bookIDs.contains(transactionLedgerLinks[index].ledgerId) {
+            transactionLedgerLinks[index].splitEnabled = !transaction.splitParticipantIds.isEmpty
+            transactionLedgerLinks[index].payerParticipantId = transaction.paidByParticipantId
+            transactionLedgerLinks[index].splitParticipantIds = transaction.splitParticipantIds
+            transactionLedgerLinks[index].splitParticipantNames = transaction.splitParticipantNames
+            transactionLedgerLinks[index].isSplitCustomized = true
+            transactionLedgerLinks[index].configVersion += 1
+        }
+    }
+
+    func transactionLinks(for transactionId: Int) -> [TransactionLedgerLink] {
+        transactionLedgerLinks.filter { $0.transactionId == transactionId }
+    }
+
+    func link(for transactionId: Int, bookId: Int) -> TransactionLedgerLink? {
+        transactionLedgerLinks.first { $0.transactionId == transactionId && $0.ledgerId == bookId }
+    }
+
+    func transactionsForBook(_ bookId: Int) -> [LedgerTransaction] {
+        let linkedIDs = Set(transactionLedgerLinks.filter { $0.ledgerId == bookId }.map(\.transactionId))
+        return transactions.filter { linkedIDs.contains($0.id) || $0.bookIds.contains(bookId) || $0.bookId == bookId }
+    }
+
     private func refreshDerivedData() {
+        _ = migrateTransactionLedgerLinksIfNeeded()
         books = recomputeBookSummaries(from: books, transactions: transactions)
-        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets)
+        budgets = LocalAnalytics.computeBudgetProgress(transactions: transactions, categories: flattenedCategories, budgets: budgets, links: transactionLedgerLinks)
     }
 
     private func recomputeBookSummaries(from books: [LedgerBook], transactions: [LedgerTransaction]) -> [LedgerBook] {
         books.map { book in
-            let scoped = transactions.filter { $0.bookIds.contains(book.id) || $0.bookId == book.id }
-            let income = scoped.filter { $0.kind == .income }.reduce(0.0) { $0 + $1.selfShareAmount }
-            let expense = scoped.filter { $0.kind == .expense }.reduce(0.0) { $0 + $1.selfShareAmount }
+            let scoped = transactionsForBook(book.id)
+            let income = scoped.filter { $0.kind == .income }.reduce(0.0) { total, transaction in total + effectiveShareAmount(transaction, bookId: book.id) }
+            let expense = scoped.filter { $0.kind == .expense }.reduce(0.0) { total, transaction in total + effectiveShareAmount(transaction, bookId: book.id) }
             return LedgerBook(
                 id: book.id,
                 name: book.name,
@@ -1517,6 +1607,13 @@ final class LedgerStore: ObservableObject {
                 autoCollectCategoryIds: book.autoCollectCategoryIds
             )
         }
+    }
+
+    private func effectiveShareAmount(_ transaction: LedgerTransaction, bookId: Int) -> Double {
+        guard let link = link(for: transaction.id, bookId: bookId) else { return transaction.selfShareAmount }
+        guard link.includeInStatistics else { return 0 }
+        guard link.splitEnabled, !link.splitParticipantIds.isEmpty else { return transaction.amount }
+        return link.selfShareAmount(for: transaction.amount) ?? transaction.selfShareAmount
     }
 
     private func allTransactions(in window: DateWindow) -> [LedgerTransaction] {
@@ -1665,10 +1762,12 @@ final class LedgerStore: ObservableObject {
     private func currentSnapshot(markUpdatedAt: Bool) -> PersistedLedgerSnapshot {
         let snapshotUpdatedAt = markUpdatedAt ? Date() : (localUpdatedAt ?? lastSyncAt ?? Date())
         return PersistedLedgerSnapshot(
+            schemaVersion: 2,
             categories: categories,
             books: books,
             transactions: transactions,
             budgets: budgets,
+            transactionLedgerLinks: transactionLedgerLinks,
             nextTransactionId: nextTransactionId,
             nextBookId: nextBookId,
             nextCategoryId: nextCategoryId,
@@ -1727,6 +1826,7 @@ final class LedgerStore: ObservableObject {
         books = snapshot.books
         transactions = snapshot.transactions
         budgets = snapshot.budgets
+        transactionLedgerLinks = snapshot.transactionLedgerLinks
         nextTransactionId = snapshot.nextTransactionId
         nextBookId = snapshot.nextBookId
         nextCategoryId = snapshot.nextCategoryId

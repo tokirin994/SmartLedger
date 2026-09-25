@@ -8,6 +8,13 @@ struct SettingsView: View {
     @State private var newChannel = ""
     @State private var demoMessage: String?
 
+    /// Demo data is only useful on an empty installation. Once the user has
+    /// created meaningful data, keep developer-only entry points out of the
+    /// normal settings flow so they cannot be triggered accidentally.
+    private var shouldShowDeveloperTools: Bool {
+        !store.isLoading && store.transactions.isEmpty && store.budgets.isEmpty && store.books.count <= 1
+    }
+
     var body: some View {
         Form {
             Section("外观") {
@@ -21,7 +28,7 @@ struct SettingsView: View {
                     .onChange(of: cloudEnabled) { _, enabled in
                         Task { await store.setCloudSyncEnabled(enabled) }
                     }
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     Image(systemName: store.cloudAccountStatus == .available ? "checkmark.icloud.fill" : "icloud.slash")
                         .foregroundStyle(store.cloudAccountStatus == .available ? .green : .secondary)
                     VStack(alignment: .leading, spacing: 2) {
@@ -43,9 +50,6 @@ struct SettingsView: View {
                         Text(schedule.title).tag(schedule)
                     }
                 }
-                Text(store.cloudSyncSchedule.detail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 DisclosureGroup("配置与诊断", isExpanded: $cloudConfigurationExpanded) {
                     TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
@@ -54,16 +58,25 @@ struct SettingsView: View {
                     SecureField("应用密码", text: $settings.jianguoyunAppPassword)
                     Text("请在坚果云账户安全设置中创建应用密码；应用会在首次推送时创建 SmartLedger 目录。")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Button("检查 WebDAV 连接") { Task { await store.refreshCloudAccountState() } }
-                    Menu("同步操作") {
-                        Button("智能同步") { Task { await store.smartSync() } }
-                        Button("仅推送到坚果云") { Task { await store.pushToCloud() } }
-                        Button("仅从坚果云拉取") { Task { await store.pullFromCloud() } }
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await store.refreshCloudAccountState() }
+                        } label: {
+                            Label("检查连接", systemImage: "network")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(store.syncState == .checking || store.syncState == .syncing)
+
+                        Menu {
+                            Button { Task { await store.smartSync() } } label: { Label("智能同步", systemImage: "arrow.triangle.2.circlepath") }
+                            Button { Task { await store.pushToCloud() } } label: { Label("仅推送到坚果云", systemImage: "icloud.and.arrow.up") }
+                            Button { Task { await store.pullFromCloud() } } label: { Label("仅从坚果云拉取", systemImage: "icloud.and.arrow.down") }
+                        } label: {
+                            Label("立即同步", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .disabled(!cloudEnabled || !settings.jianguoyunConfigured || store.syncState == .syncing)
-                    Text("同步会记录最近一次双方一致的内容版本。只有本地和云端都在该版本之后发生变更时，才会提示冲突；连续保存不会再被误判为冲突。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
                 if let conflict = store.pendingSyncConflict {
                     VStack(alignment: .leading, spacing: 8) {
@@ -85,22 +98,34 @@ struct SettingsView: View {
             }
 
             Section("账本归属") {
-                Toggle("新流水显示账本归属推荐", isOn: $settings.bookAssignmentPromptEnabled)
+                Toggle(isOn: $settings.bookAssignmentPromptEnabled) {
+                    Label("新流水显示账本归属推荐", systemImage: "books.vertical")
+                }
                 Text("关闭后，符合自动归集规则的新流水会直接归入账本，不再额外提醒。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
 
-            Section("开发辅助") {
-                Button("生成一批模拟数据") {
-                    Task {
-                        await store.appendExtendedDemoData()
-                        demoMessage = store.errorMessage ?? "已生成模拟账本与 10 笔模拟流水"
+            if shouldShowDeveloperTools {
+                Section {
+                    Button("生成一批模拟数据") {
+                        Task {
+                            await store.appendExtendedDemoData()
+                            demoMessage = store.errorMessage ?? "已生成模拟账本与 10 笔模拟流水"
+                        }
                     }
+                    .disabled(store.isLoading || store.syncState == .syncing)
+                    Text("仅在尚无流水的空白安装中显示。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Label("开发辅助", systemImage: "wand.and.stars")
                 }
-                .disabled(store.isLoading || store.syncState == .syncing)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .dismissKeyboardWhenTappedOutside()
+        .scrollContentBackground(.hidden)
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("设置")
         .task { cloudEnabled = store.cloudSyncEnabled }
         .alert("模拟数据", isPresented: Binding(get: { demoMessage != nil }, set: { if !$0 { demoMessage = nil } })) {

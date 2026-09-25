@@ -335,21 +335,11 @@ struct AppBackdrop: View {
 
 extension View {
     /// Dismisses text input from every screen, including decimal keyboards
-    /// that do not provide a Return/Done key. A zero-distance drag receives a
-    /// tap as well as a small touch movement without consuming child actions.
+    /// that do not provide a Return/Done key. The window-level recognizer also
+    /// works inside List/ScrollView rows where a SwiftUI gesture can be
+    /// swallowed by the scroll container.
     func dismissKeyboardWhenTappedOutside() -> some View {
-        contentShape(Rectangle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0).onEnded { _ in
-                UIApplication.shared.sendAction(
-                    #selector(UIResponder.resignFirstResponder),
-                    to: nil,
-                    from: nil,
-                    for: nil
-                )
-            },
-            including: .subviews
-        )
+        background(KeyboardDismissalInstaller())
     }
 
     func appBackground() -> some View {
@@ -375,3 +365,71 @@ extension View {
         }
     }
 }
+
+/// Installs one non-blocking tap recognizer on the hosting window. This is
+/// intentionally UIKit-backed instead of attached to a particular ScrollView:
+/// numeric keyboards appear in sheets, lists and nested navigation stacks, and
+/// all of those containers otherwise handle taps differently.
+private struct KeyboardDismissalInstaller: UIViewRepresentable {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        private weak var installedWindow: UIWindow?
+
+        func install(in window: UIWindow?) {
+            guard let window else { return }
+            if window.gestureRecognizers?.contains(where: { $0 is KeyboardDismissTapGesture }) == true {
+                installedWindow = window
+                return
+            }
+
+            let recognizer = KeyboardDismissTapGesture(target: self, action: #selector(handleTap))
+            recognizer.delegate = self
+            recognizer.cancelsTouchesInView = false
+            recognizer.delaysTouchesBegan = false
+            recognizer.delaysTouchesEnded = false
+            window.addGestureRecognizer(recognizer)
+            installedWindow = window
+        }
+
+        @objc private func handleTap() {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            // Tapping another input should transfer focus normally; every
+            // other tap dismisses the current numeric/text keyboard.
+            var view = touch.view
+            while let current = view {
+                if current is UITextField || current is UITextView || current is UISearchBar {
+                    return false
+                }
+                view = current.superview
+            }
+            return true
+        }
+
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.isUserInteractionEnabled = false
+        DispatchQueue.main.async {
+            context.coordinator.install(in: view.window)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            context.coordinator.install(in: uiView.window)
+        }
+    }
+}
+
+private final class KeyboardDismissTapGesture: UITapGestureRecognizer {}

@@ -19,52 +19,51 @@ struct TransactionsView: View {
    var body: some View {
 
         NavigationStack {
-            Group {
+            List {
                 if filteredTransactions.isEmpty {
                     ContentUnavailableView(
-                        "暂无流水",
+                        searchText.isEmpty ? "暂无流水" : "没有匹配的流水",
                         systemImage: "list.bullet.rectangle.portrait"
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .appBackground()
+                    .frame(maxWidth: .infinity, minHeight: 180)
+                    .listRowBackground(Color.clear)
                 } else {
-                    List {
-                        summaryHeader
+                    summaryHeader
 
-                        ForEach(groupedTransactions, id: \.dateKey) { group in
-                            Section {
-                                ForEach(group.items, id: \.id) { tx in
-                                    transactionListRow(tx)
-                                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                                        .listRowBackground(Color.clear)
-                                }
-                            } header: {
-                                HStack {
-                                    Text(group.title)
-                                        .font(.headline.weight(.bold))
-                                        .foregroundStyle(groupHeaderForeground)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(groupHeaderBackground, in: Capsule())
-
-                                    Spacer()
-
-                                    Text(group.total.cnyText)
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(groupHeaderForeground)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 7)
-                                        .background(groupHeaderBackground.opacity(0.92), in: Capsule())
-                                }
-                                .padding(.top, 6)
+                    ForEach(groupedTransactions, id: \.dateKey) { group in
+                        Section {
+                            ForEach(group.items, id: \.id) { tx in
+                                transactionListRow(tx)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                                    .listRowBackground(Color.clear)
                             }
+                        } header: {
+                            HStack {
+                                Text(group.title)
+                                    .font(.headline.weight(.bold))
+                                    .foregroundStyle(groupHeaderForeground)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(groupHeaderBackground, in: Capsule())
+
+                                Spacer()
+
+                                Text(group.total.cnyText)
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(groupHeaderForeground)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(groupHeaderBackground.opacity(0.92), in: Capsule())
+                            }
+                            .padding(.top, 6)
                         }
                     }
-                    .listStyle(.insetGrouped)
-                    .scrollContentBackground(.hidden)
-                    .appBackground()
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .appBackground()
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("流水")
                 .toolbar {
@@ -694,7 +693,8 @@ private struct QuickBookAssignSheet: View {
 
     private var associatedBooks: [LedgerBook] {
         guard let liveTransaction = liveTransaction else { return [] }
-        return store.books.filter { liveTransaction.bookIds.contains($0.id) || liveTransaction.bookId == $0.id }
+        let linkedBookIDs = Set(store.transactionLinks(for: liveTransaction.id).map(\.ledgerId))
+        return store.books.filter { linkedBookIDs.contains($0.id) || liveTransaction.bookIds.contains($0.id) || liveTransaction.bookId == $0.id }
     }
 }
 
