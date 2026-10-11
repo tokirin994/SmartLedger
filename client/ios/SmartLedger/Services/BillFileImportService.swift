@@ -1,14 +1,16 @@
 import Compression
 import Foundation
+import PDFKit
 
-/// Parses exported Alipay, WeChat, Meituan and JD bill files into the same
-/// editable review model used by screenshot OCR.
+/// Parses exported Alipay, WeChat, Meituan, JD and bank statement files into
+/// the same editable review model used by screenshot OCR.
 struct BillFileImportService: Sendable {
     enum Source: String, Equatable, Sendable {
         case alipay = "支付宝"
         case wechat = "微信"
         case meituan = "美团"
         case jd = "京东"
+        case bank = "银行流水"
         case unknown = "账单文件"
     }
 
@@ -22,8 +24,11 @@ struct BillFileImportService: Sendable {
             case .unreadable(let name):
                 return "无法读取 \(name)，请确认文件没有损坏。"
             case .unsupported(let name):
-                return "暂不支持 \(name) 格式，请选择 CSV、TXT 或 XLSX 账单文件。"
+                return "暂不支持 \(name) 格式，请选择银行流水 PDF 或 CSV、TXT、XLSX 账单文件。"
             case .invalidHeader(let name):
+                if name.lowercased().hasSuffix(".pdf") {
+                    return "未识别出银行流水 PDF 的表格内容。请确认 PDF 中的文字可选择或复制；扫描图片版暂不支持文件解析。"
+                }
                 return "未识别出 \(name) 的账单表头，请选择交易明细导出文件。"
             }
         }
@@ -46,6 +51,15 @@ struct BillFileImportService: Sendable {
             return try parse(rows: rows, source: source == .unknown ? inferSource(rows: rows) : source, fileName: fileName)
         }
 
+        if url.pathExtension.lowercased() == "pdf" {
+            guard let document = PDFDocument(data: data) else {
+                throw ImportError.unreadable(fileName)
+            }
+            let rows = PDFTableRows(document: document).read()
+            let pdfSource = source == .unknown ? inferSource(rows: rows) : source
+            return try parse(rows: rows, source: pdfSource, fileName: fileName)
+        }
+
         guard ["csv", "txt", "tsv", ""].contains(url.pathExtension.lowercased()) else {
             throw ImportError.unsupported(fileName)
         }
@@ -59,18 +73,20 @@ struct BillFileImportService: Sendable {
     private func parse(rows: [[String]], source: Source, fileName: String) throws -> [OCRImportResult] {
         guard let headerRow = rows.firstIndex(where: { row in
             let line = row.joined(separator: " ").billNormalized
-            return (line.contains("交易时间") || line.contains("交易创建时间") || line.contains("日期"))
+            return (line.contains("交易时间") || line.contains("交易创建时间") || line.contains("记账日期") || line.contains("日期"))
                 && (line.contains("金额") || line.contains("收支") || line.contains("收/支"))
         }) else {
             throw ImportError.invalidHeader(fileName)
         }
 
         let headers = rows[headerRow].map(\.billNormalized)
-        let dateIndex = index(headers, ["交易成功时间", "交易时间", "交易创建时间", "创建时间", "支付时间", "时间", "日期"])
-        let titleIndex = index(headers, ["商品说明", "商品名称", "订单标题", "交易说明", "商品", "交易对方", "收款方", "商户"])
-        let merchantIndex = index(headers, ["交易对方", "收款方", "商户", "商户名称", "商家名称", "店铺名称"])
+        let dateIndex = index(headers, ["交易成功时间", "交易时间", "交易创建时间", "创建时间", "支付时间", "记账日期", "时间", "日期"])
+        let timeIndex = index(headers, ["记账时间"])
+        let titleIndex = index(headers, ["商品说明", "商品名称", "订单标题", "交易说明", "交易名称", "商品", "交易对方", "对方账户名", "收款方", "商户"])
+        let merchantIndex = index(headers, ["交易对方", "对方账户名", "收款方", "商户", "商户名称", "商家名称", "店铺名称"])
+        let memoIndex = index(headers, ["附言", "摘要", "备注"])
         let flowIndex = index(headers, ["收/支", "收支", "交易类型", "类型"])
-        let paymentIndex = index(headers, ["收/付款方式", "付款方式", "支付方式", "支付渠道"])
+        let paymentIndex = index(headers, ["收/付款方式", "付款方式", "支付方式", "支付渠道", "渠道"])
         let amountIndex = source == .meituan
             ? (index(headers, ["实付金额"]) ?? index(headers, ["金额", "订单金额"]))
             : index(headers, ["金额（元）", "金额(元)", "金额", "实付金额", "订单金额", "支付金额"])
@@ -84,11 +100,11 @@ struct BillFileImportService: Sendable {
         var results: [OCRImportResult] = []
         var seen = Set<String>()
         for row in rows.dropFirst(headerRow + 1) {
-            guard let date = parseDate(value(row, dateIndex)),
+            guard let date = parseDate(value(row, dateIndex), time: value(row, timeIndex)),
                   let amountValue = parseAmount(value(row, amountIndex)),
                   amountValue != 0 else { continue }
 
-            let title = firstNonEmpty(value(row, titleIndex), value(row, merchantIndex)).billDecoded
+            let title = firstNonEmpty(value(row, titleIndex), value(row, merchantIndex), value(row, memoIndex)).billDecoded
             guard !title.isEmpty else { continue }
             guard let kind = parseKind(value(row, flowIndex), amountText: value(row, amountIndex), source: source) else { continue }
 
@@ -100,9 +116,12 @@ struct BillFileImportService: Sendable {
             guard seen.insert(key).inserted else { continue }
 
             let merchant = value(row, merchantIndex).billDecoded
+            let classificationMerchant = [merchant, value(row, memoIndex).billDecoded]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
             let category = classify(
                 title: title,
-                merchant: merchant,
+                merchant: classificationMerchant,
                 sourceCategory: value(row, categoryIndex),
                 source: source,
                 kind: kind,
@@ -136,19 +155,21 @@ struct BillFileImportService: Sendable {
         if name.contains("微信") || name.contains("wechat") { return .wechat }
         if name.contains("美团") || name.contains("meituan") { return .meituan }
         if name.contains("京东") || name.contains("jd") { return .jd }
+        if name.contains("银行") || name.contains("交易流水明细") { return .bank }
         return .unknown
     }
 
     private func inferSource(rows: [[String]]) -> Source {
         guard let header = rows.first(where: { row in
             let line = row.joined(separator: " ").billNormalized
-            return (line.contains("交易时间") || line.contains("交易创建时间") || line.contains("日期"))
+            return (line.contains("交易时间") || line.contains("交易创建时间") || line.contains("记账日期") || line.contains("日期"))
                 && (line.contains("金额") || line.contains("收支") || line.contains("收/支"))
         })?.joined(separator: " ").billNormalized else { return .unknown }
         if header.contains("订单标题") || header.contains("实付金额") { return .meituan }
         if header.contains("交易说明") || header.contains("交易分类") && header.contains("商户名称") { return .jd }
         if header.contains("商品说明") && header.contains("收/付款方式") { return .alipay }
         if header.contains("商品") && header.contains("交易对方") { return .wechat }
+        if header.contains("记账日期") && header.contains("交易名称") && header.contains("对方账户名") { return .bank }
         return .unknown
     }
 
@@ -186,6 +207,7 @@ struct BillFileImportService: Sendable {
         if text.contains("收入") || text.contains("退款") || text.contains("收款") { return .income }
         if text.contains("支出") || text.contains("付款") || text.contains("消费") { return .expense }
         if amountText.trimmingCharacters(in: .whitespaces).hasPrefix("-") { return .expense }
+        if source == .bank { return .income }
         return source == .unknown ? nil : .expense
     }
 
@@ -199,11 +221,15 @@ struct BillFileImportService: Sendable {
         }
 
         let food = ["外卖", "餐", "饭", "面", "粉", "烧烤", "火锅", "汉堡", "肯德基", "麦当劳", "奶茶", "咖啡", "饮料", "食堂", "小吃", "寿司", "料理", "披萨", "炸鸡"]
-        if source == .meituan { return ["餐饮", "外卖"] }
         if sourceCategory.contains("餐饮") || food.contains(where: { text.contains($0) }) {
-            let hour = Calendar.current.component(.hour, from: date)
+            // 流水时间按账单使用的中国时区计算，避免远程运行环境（通常为 UTC）
+            // 把晚餐误判成早餐。
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+            let hour = calendar.component(.hour, from: date)
             return ["餐饮", "日常吃饭", hour < 11 ? "早餐" : (hour < 16 ? "午餐" : "晚餐")]
         }
+        if source == .meituan { return ["餐饮", "外卖"] }
         if text.contains("火车") || text.contains("机票") || text.contains("飞机") || text.contains("12306") {
             return ["交通出行", "火车机票"]
         }
@@ -231,8 +257,9 @@ struct BillFileImportService: Sendable {
         return ["购物", "日用百货"]
     }
 
-    private func parseDate(_ text: String) -> Date? {
+    private func parseDate(_ text: String, time: String = "") -> Date? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let combinedText = time.isEmpty || text.contains(":") ? text : "\(text) \(time)"
         if let serial = Double(text), serial > 20_000, serial < 80_000 {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
@@ -244,7 +271,8 @@ struct BillFileImportService: Sendable {
             "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm",
             "yyyy.MM.dd HH:mm:ss", "yyyy.MM.dd HH:mm",
             "yyyy年MM月dd日 HH:mm:ss", "yyyy年MM月dd日 HH:mm",
-            "MM-dd HH:mm:ss", "MM-dd HH:mm"
+            "MM-dd HH:mm:ss", "MM-dd HH:mm",
+            "yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd", "yyyy年MM月dd日"
         ]
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
@@ -252,7 +280,7 @@ struct BillFileImportService: Sendable {
         formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         for format in formats {
             formatter.dateFormat = format
-            if let date = formatter.date(from: text) { return date }
+            if let date = formatter.date(from: combinedText) { return date }
         }
         return nil
     }
@@ -329,6 +357,184 @@ private struct CSVRows {
             index += 1
         }
         return rows
+    }
+}
+
+/// Reconstructs a simple text table from PDFKit glyph coordinates. This keeps
+/// bank PDF parsing independent of page templates and supports multi-page
+/// exports with repeated table headers.
+private struct PDFTableRows {
+    private struct TextRun {
+        let text: String
+        let x: CGFloat
+        let y: CGFloat
+        let width: CGFloat
+        let height: CGFloat
+    }
+
+    let document: PDFDocument
+
+    func read() -> [[String]] {
+        var result: [[String]] = []
+        for pageIndex in 0..<document.pageCount {
+            guard let page = document.page(at: pageIndex) else { continue }
+            result.append(contentsOf: rows(on: page))
+        }
+        return result
+    }
+
+    private func rows(on page: PDFPage) -> [[String]] {
+        guard let text = page.string, !text.isEmpty else { return [] }
+        // PDFKit's per-character bounds are unreliable for some generated and
+        // bank PDFs (some glyphs get zero-width or tiny boxes). Text selections
+        // preserve each positioned text run, which lets us recover table cells
+        // without depending on a particular page size or bank template.
+        let pageBounds = page.bounds(for: .mediaBox)
+        let selections = page.selection(for: pageBounds)?.selectionsByLine() ?? []
+        let runs = selections.compactMap { selection -> TextRun? in
+            guard let value = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+            let bounds = selection.bounds(for: page)
+            guard bounds.width > 0, bounds.height > 0 else { return nil }
+            return TextRun(text: value, x: bounds.minX, y: bounds.midY, width: bounds.width, height: bounds.height)
+        }
+
+        if !runs.isEmpty {
+            let lines = groupedLines(runs)
+            if let header = lines.first(where: { line in
+                let value = line.sorted { $0.x < $1.x }.map(\.text).joined().billNormalized
+                return value.contains("记账日期") && value.contains("金额") && value.contains("交易名称")
+            }) {
+                let headerRuns = header.sorted { $0.x < $1.x }
+                if headerRuns.count >= 6 {
+                    return mappedRows(lines, columnStarts: headerRuns.map(\.x))
+                }
+                // Some PDF generators return a whole text object as one run,
+                // even when it visually spans multiple columns. Fall through
+                // to glyph geometry so gaps in the table header recover columns.
+            }
+        }
+
+        let source = text as NSString
+        var glyphs: [TextRun] = []
+        glyphs.reserveCapacity(source.length)
+        for index in 0..<source.length {
+            let character = source.substring(with: NSRange(location: index, length: 1))
+            guard !character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let bounds = page.characterBounds(at: index)
+            guard bounds.width > 0, bounds.height > 0 else { continue }
+            glyphs.append(TextRun(text: character, x: bounds.minX, y: bounds.midY, width: bounds.width, height: bounds.height))
+        }
+        if !glyphs.isEmpty {
+            let lines = groupedLines(glyphs)
+            if let header = lines.first(where: { line in
+                line.sorted { $0.x < $1.x }.map(\.text).joined().billNormalized
+                    .range(of: "记账日期.*金额.*交易名称", options: .regularExpression) != nil
+            }) {
+                let headerGlyphs = header.sorted { $0.x < $1.x }
+                let widths = headerGlyphs.map(\.width).filter { $0 > 0 }.sorted()
+                let typicalWidth = widths.isEmpty ? 8 : widths[widths.count / 2]
+                let gapThreshold = max(2, typicalWidth * 0.55)
+                var starts: [CGFloat] = []
+                var previous: TextRun?
+                for glyph in headerGlyphs {
+                    if let previous,
+                       glyph.x - previous.x - previous.width > gapThreshold {
+                        starts.append(glyph.x)
+                    } else if starts.isEmpty {
+                        starts.append(glyph.x)
+                    }
+                    previous = glyph
+                }
+                if starts.count >= 6 {
+                    return mappedRows(lines, columnStarts: starts)
+                }
+            }
+        }
+
+        // Logical text-only fallback for PDFs whose text layer has no usable
+        // geometry. Bank exports commonly preserve transaction records in
+        // reading order even when PDFKit coalesces the whole table row into one run.
+        if let rows = logicalBankRows(text), !rows.isEmpty { return rows }
+        return text.components(separatedBy: .newlines)
+            .map { $0.split(whereSeparator: \.isWhitespace).map(String.init) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func logicalBankRows(_ text: String) -> [[String]]? {
+        let normalized = text.replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        let nsText = normalized as NSString
+        let pattern = #"\d{4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{2}:\d{2}:\d{2}"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let records = expression.matches(in: normalized, range: NSRange(location: 0, length: nsText.length))
+        guard !records.isEmpty else { return nil }
+
+        let knownChannels = ["手机银行", "银企对接", "POS机", "支付宝", "微信", "柜面", "网银"]
+        var rows = [["记账日期", "记账时间", "币别", "金额", "余额", "交易名称", "渠道", "网点名称", "附言", "对方账户名", "对方卡号/账号", "对方开户地址"]]
+        for (index, match) in records.enumerated() {
+            let end = index + 1 < records.count ? records[index + 1].range.location : nsText.length
+            let chunk = nsText.substring(with: NSRange(location: match.range.location, length: end - match.range.location))
+            let tokens = chunk.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard tokens.count >= 7 else { continue }
+
+            let moneyPattern = #"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})$"#
+            let moneyIndices = tokens.indices.dropFirst(2).filter {
+                tokens[$0].range(of: moneyPattern, options: .regularExpression) != nil
+            }
+            guard moneyIndices.count >= 2 else { continue }
+            let amountIndex = moneyIndices[0]
+            let balanceIndex = moneyIndices[1]
+            guard let channelIndex = tokens.indices.first(where: { position in
+                position > balanceIndex && knownChannels.contains(where: { tokens[position].contains($0) })
+            }) else { continue }
+
+            let title = tokens[(balanceIndex + 1)..<channelIndex].joined().trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty else { continue }
+            let channel = knownChannels.first(where: { tokens[channelIndex].contains($0) }) ?? tokens[channelIndex]
+            var tail = Array(tokens.dropFirst(channelIndex + 1))
+            if tail.first?.allSatisfy({ $0 == "-" }) == true { tail.removeFirst() }
+            let branch = tail.indices.contains(0) ? tail[0] : ""
+            let memo = tail.indices.contains(1) ? tail[1] : ""
+            let counterparty = tail.indices.contains(2) ? tail[2] : ""
+            let account = tail.indices.contains(3) ? tail[3] : ""
+            let address = tail.dropFirst(min(4, tail.count)).joined(separator: " ")
+            rows.append([
+                tokens[0], tokens[1], "人民币", tokens[amountIndex], tokens[balanceIndex],
+                title, channel, branch, memo, counterparty, account, address
+            ])
+        }
+        return rows.count > 1 ? rows : nil
+    }
+
+    private func mappedRows(_ lines: [[TextRun]], columnStarts: [CGFloat]) -> [[String]] {
+        let boundaries = zip(columnStarts, columnStarts.dropFirst()).map { ($0 + $1) / 2 }
+        return lines.map { line in
+            var cells = Array(repeating: "", count: columnStarts.count)
+            for run in line.sorted(by: { $0.x < $1.x }) {
+                let column = boundaries.firstIndex(where: { run.x < $0 }) ?? (columnStarts.count - 1)
+                if !cells[column].isEmpty { cells[column].append(" ") }
+                cells[column].append(contentsOf: run.text)
+            }
+            return cells.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+    }
+
+    private func groupedLines(_ runs: [TextRun]) -> [[TextRun]] {
+        let sorted = runs.sorted { $0.y == $1.y ? $0.x < $1.x : $0.y > $1.y }
+        var lines: [[TextRun]] = []
+        var centers: [CGFloat] = []
+        for run in sorted {
+            let tolerance = max(2.0, run.height * 0.35)
+            if let index = centers.indices.min(by: { abs(centers[$0] - run.y) < abs(centers[$1] - run.y) }),
+               abs(centers[index] - run.y) <= tolerance {
+                lines[index].append(run)
+                centers[index] = lines[index].reduce(CGFloat.zero) { $0 + $1.y } / CGFloat(lines[index].count)
+            } else {
+                lines.append([run])
+                centers.append(run.y)
+            }
+        }
+        return lines
     }
 }
 
@@ -445,3 +651,24 @@ private struct XLSXRows {
         }
     }
 }
+/*
+// The duplicate trailing worksheet parser fragment was removed.
+// End of the file; no trailing parser fragment.
+// }
+// End of the file; no trailing parser fragment.
+                row[column] = value
+            }
+            return row
+        }
+    }
+}
+// The duplicate trailing worksheet parser fragment was removed.
+// End of the file; no trailing parser fragment.
+// }
+// End of the file; no trailing parser fragment.
+trailing parser fragment.
+*/
+/*
+ing parser fragment.
+trailing parser fragment.
+*/
