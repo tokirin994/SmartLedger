@@ -4,11 +4,22 @@ import UIKit
 import UniformTypeIdentifiers
 // Batch import UI supports screenshots and exported bill files.
 
+func ocrOffsetIncomeCategoryID(in categories: [LedgerCategory], presetKey: String? = nil) -> Int? {
+    let income = categories.filter { $0.flowType == .income }
+    let preference = presetKey == "meituan_enterprise_meal"
+        ? ["补贴", "报销", "退款"]
+        : ["报销", "退款", "补贴"]
+    return preference.compactMap { keyword in
+        income.first(where: { $0.displayName.contains(keyword) })?.id
+    }.first ?? income.first?.id
+}
+
 struct ImportReceiptView: View {
     @EnvironmentObject private var store: LedgerStore
     @EnvironmentObject var settings: AppSettings
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var selectedImages: [UIImage] = []
+    @State private var previewedImage: OCRImagePreviewItem?
     @State private var recognizedText: String = ""
     @State private var isRecognizing = false
     @State private var importMode: ImportMode = .image
@@ -23,13 +34,15 @@ struct ImportReceiptView: View {
     @State private var selectedBatchIDs: Set<String> = []
     @State private var showClearConfirmation = false
     @State private var editingBatchItem: OCRImportResult?
+    @State private var showBatchCategoryEditor = false
+    @State private var batchDraftOverrides: [String: TransactionDraft] = [:]
     @State private var importSaveError: String?
     private let ocrService = OCRImportService()
 
     private var unboundSplitCount: Int { draft.splitParticipantIds.count }
 
     private var unboundSplitEnabled: Bool {
-        draft.bookId == nil && unboundSplitCount > 1
+        draft.hasExplicitBookSelection && !draft.manuallySelectBooks && draft.bookIds.isEmpty && unboundSplitCount > 1
     }
 
     private func setUnboundSplitCount(_ count: Int) {
@@ -64,20 +77,25 @@ struct ImportReceiptView: View {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 10) {
                                     ForEach(Array(selectedImages.enumerated()), id: \.offset) { _, image in
-                                        Image(uiImage: image)
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 86, height: 86)
-                                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                            .overlay(alignment: .topTrailing) {
-                                                Text("OCR")
-                                                    .font(.caption2.weight(.bold))
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 4)
-                                                    .background(Color.black.opacity(0.72), in: Capsule())
-                                                    .foregroundStyle(.white)
-                                                    .padding(5)
-                                            }
+                                        Button {
+                                            previewedImage = OCRImagePreviewItem(image: image)
+                                        } label: {
+                                            Image(uiImage: image)
+                                                .resizable()
+                                                .scaledToFill()
+                                                .frame(width: 86, height: 86)
+                                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                                .overlay(alignment: .topTrailing) {
+                                                    Image(systemName: "magnifyingglass")
+                                                        .font(.caption.weight(.bold))
+                                                        .padding(6)
+                                                        .background(Color.black.opacity(0.72), in: Circle())
+                                                        .foregroundStyle(.white)
+                                                        .padding(5)
+                                                }
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("预览识别图片")
                                     }
                                 }
                             }
@@ -87,13 +105,15 @@ struct ImportReceiptView: View {
                         }
                     } else {
                         Button {
+                            guard !isRecognizing else { return }
                             showFileImporter = true
                         } label: {
                             Label("选择账单文件（可多选）", systemImage: "doc.badge.plus")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
-                        Text("支持支付宝、微信、美团、京东导出的 CSV / TXT / XLSX 文件")
+                        .disabled(isRecognizing)
+                        Text("支持支付宝、微信、美团、京东账单文件，以及银行导出的 PDF / CSV / TXT / XLSX")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if !importedFileNames.isEmpty {
@@ -125,6 +145,9 @@ struct ImportReceiptView: View {
 }
 .appBackground()
 .scrollDismissesKeyboard(.interactively)
+.fullScreenCover(item: $previewedImage) { item in
+    OCRImagePreview(image: item.image)
+}
 .navigationTitle(importMode == .image ? "识图导入" : "文件导入")
 .toolbar {
     if !selectedImages.isEmpty || !importedFileNames.isEmpty || store.hasPendingOCRImport {
@@ -192,11 +215,38 @@ struct ImportReceiptView: View {
     Text("当前还有未保存的识别结果，切换方式会丢弃这些待确认流水。")
 }
 .sheet(item: $editingBatchItem) { item in
-    OCRBatchItemEditor(item: item) { updated in
+    OCRBatchItemEditor(
+        item: item,
+        initialDraft: batchDraftOverrides[item.id] ?? makeBatchDraft(for: item)
+    ) { updated, editedDraft in
         replaceBatchItem(updated)
+        batchDraftOverrides[item.id] = editedDraft
     }
     .environmentObject(store)
     .environmentObject(settings)
+}
+.sheet(isPresented: $showBatchCategoryEditor) {
+    let selectedItems = store.parsedImportItems.filter { selectedBatchIDs.contains($0.id) }
+    let flowTypes = Set(selectedItems.map { $0.kind ?? .expense })
+    BatchCategoryEditorSheet(flowTypes: flowTypes) { updateExpense, expenseCategoryId, updateIncome, incomeCategoryId in
+        var updatedItems = store.parsedImportItems
+        for index in updatedItems.indices where selectedBatchIDs.contains(updatedItems[index].id) {
+            let kind = updatedItems[index].kind ?? .expense
+            let shouldUpdate = kind == .expense ? updateExpense : updateIncome
+            guard shouldUpdate else { continue }
+            let categoryId = kind == .expense ? expenseCategoryId : incomeCategoryId
+            updatedItems[index].categoryPath = categoryId.flatMap { id in
+                store.flattenedCategories.first(where: { $0.id == id })?.pathComponents
+            } ?? []
+            if var override = batchDraftOverrides[updatedItems[index].id] {
+                override.kind = kind
+                override.categoryId = categoryId
+                batchDraftOverrides[updatedItems[index].id] = override
+            }
+        }
+        store.setPendingImportItems(updatedItems)
+    }
+    .environmentObject(store)
 }
         }
 }
@@ -208,6 +258,57 @@ private enum ImportMode: String, CaseIterable, Identifiable, Hashable {
     var id: String { rawValue }
     var title: String { self == .image ? "截图识别" : "账单文件" }
     var systemImage: String { self == .image ? "camera.viewfinder" : "doc.badge.plus" }
+}
+
+private struct OCRImagePreviewItem: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
+private struct OCRImagePreview: View {
+    @Environment(\.dismiss) private var dismiss
+    let image: UIImage
+    @State private var verticalDrag: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .padding(.horizontal, 12)
+                .offset(y: verticalDrag)
+                .gesture(
+                    DragGesture(minimumDistance: 18)
+                        .onChanged { value in
+                            if value.translation.height > 0 { verticalDrag = value.translation.height }
+                        }
+                        .onEnded { value in
+                            if value.translation.height > 110 {
+                                dismiss()
+                            } else {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                    verticalDrag = 0
+                                }
+                            }
+                        }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .padding(.top, 12)
+            .padding(.trailing, 16)
+            .accessibilityLabel("关闭图片预览")
+        }
+        .statusBarHidden()
+    }
 }
 
 private var batchImportSection: some View {
@@ -272,12 +373,16 @@ private var batchImportSection: some View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("取消全选") {
-                    selectedBatchIDs.removeAll()
-                }
-                .buttonStyle(.bordered)
+            Button("取消全选") {
+                selectedBatchIDs.removeAll()
+            }
+            .buttonStyle(.bordered)
 
-                Spacer()
+            Button("批量改分类") { showBatchCategoryEditor = true }
+                .buttonStyle(.bordered)
+                .disabled(selectedBatchIDs.isEmpty)
+
+            Spacer()
                 
                 Button("批量保存") {
                     Task { await saveSelectedBatchItems() }
@@ -348,13 +453,16 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             flowType: draft.kind,
             onCreateCategory: nil
         )
-        Picker("主题账本", selection: $draft.bookId) {
-            Text("不归集到主题账本").tag(Int?.none)
-            ForEach(store.books) { book in
-                Text(book.name).tag(Int?.some(book.id))
-            }
-        }
-        if draft.bookId == nil {
+        OCRBookSplitEditor(
+            bookIds: $draft.bookIds,
+            bookId: $draft.bookId,
+            splitSettings: $draft.ledgerSplitSettings,
+            hasExplicitSelection: $draft.hasExplicitBookSelection,
+            manuallySelectBooks: $draft.manuallySelectBooks,
+            books: store.books,
+            automaticBooks: automaticOCRBooks
+        )
+        if draft.hasExplicitBookSelection && !draft.manuallySelectBooks && draft.bookIds.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("多人分账")
                     .font(.headline)
@@ -377,11 +485,11 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
                 }
             }
         }
-        Toggle("启用分期", isOn: $draft.installmentEnabled)
-        if draft.installmentEnabled {
-            Stepper("分期月数: \(draft.installmentMonths)", value: $draft.installmentMonths, in: 1...24)
-            DatePicker("起始月份", selection: $draft.installmentStartMonth, displayedComponents: .date)
-        }
+        OCRInstallmentEditor(
+            isEnabled: $draft.installmentEnabled,
+            months: $draft.installmentMonths,
+            startMonth: $draft.installmentStartMonth
+        )
         if draft.kind == .expense {
             if !draft.offsetEnabled {
                 Button {
@@ -391,12 +499,15 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
                     Label("添加抵扣 / 报销", systemImage: "plus.circle.fill")
                 }
             } else {
-                Picker("抵扣类型", selection: $draft.offsetCategoryId) {
-                    Text("请选择收入分类").tag(Int?.none)
-                    ForEach(store.flattenedCategories.filter { $0.flowType == .income }) { category in
-                        Text(category.displayName).tag(Int?.some(category.id))
-                    }
-                }
+                HierarchicalCategoryPicker(
+                    title: "抵扣类型",
+                    categories: store.categories.filter { $0.flowType == .income },
+                    placeholder: "请选择收入分类",
+                    helperText: nil,
+                    selectedCategoryId: $draft.offsetCategoryId,
+                    flowType: .income,
+                    onCreateCategory: nil
+                )
                 HStack { Text("抵扣比例"); Slider(value: $draft.offsetRatio, in: 0...100, step: 1); Text("\(Int(draft.offsetRatio))%").monospacedDigit().frame(width: 42, alignment: .trailing) }
                 LabeledContent("预计生成收入", value: ocrOffsetAmount.cnyText)
                     .font(.subheadline.weight(.semibold))
@@ -426,7 +537,7 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
                 if !draft.paymentMethod.isEmpty {
                     draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
                 }
-                await saveSingleImport()
+                await saveSingleImport(presetKey: parsed.presetKey)
             }
         }
         .buttonStyle(.borderedProminent)
@@ -441,6 +552,7 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             Task {
                 await store.loadCategories()
                 applyParsedCategorySuggestion(parsed: parsed)
+                applyOCRPresetDefaults(parsed, to: &draft)
             }
         }
     }
@@ -450,28 +562,27 @@ private func importDraftForm(parsed: OCRImportResult) -> some View {
             draft.categoryId = nil
         }
     }
-    .onChange(of: draft.installmentEnabled) { _, enabled in
-        if enabled {
-            draft.installmentMonths = 1
-        }
-    }
 }
 
 private var preferredOCRIncomeCategoryID: Int? {
-    let income = store.flattenedCategories.filter { $0.flowType == .income }
-    return income.first(where: { $0.displayName.contains("报销") })?.id
-        ?? income.first(where: { $0.displayName.contains("退款") })?.id
-        ?? income.first?.id
+    ocrOffsetIncomeCategoryID(in: store.flattenedCategories)
 }
 
 private var ocrOffsetAmount: Double {
     ((Double(draft.amount) ?? 0) * min(max(draft.offsetRatio, 0), 100) / 100 * 100).rounded() / 100
 }
 
+private var automaticOCRBooks: [LedgerBook] {
+    store.recommendedBooks(for: draft.happenedAt).filter {
+        store.shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId, kind: draft.kind)
+    }
+}
+
 private func applyParsedDefaults(parsed: OCRImportResult) {
     draft = TransactionDraft(parsed: parsed, source: pendingImportSource)
     draft.ocrText = recognizedText
     applyParsedCategorySuggestion(parsed: parsed)
+    applyOCRPresetDefaults(parsed, to: &draft)
 }
 
 private func applyParsedCategorySuggestion(parsed: OCRImportResult) {
@@ -479,6 +590,27 @@ private func applyParsedCategorySuggestion(parsed: OCRImportResult) {
         return
     }
     draft.categoryId = matched.id
+}
+
+private func makeBatchDraft(for item: OCRImportResult) -> TransactionDraft {
+    var batchDraft = TransactionDraft(parsed: item, source: pendingImportSource)
+    if let matched = store.findCategory(bySuggestedPath: item.categoryPath ?? []), matched.flowType == batchDraft.kind {
+        batchDraft.categoryId = matched.id
+    }
+    applyOCRPresetDefaults(item, to: &batchDraft)
+    return batchDraft
+}
+
+private func applyOCRPresetDefaults(_ parsed: OCRImportResult, to draft: inout TransactionDraft) {
+    guard parsed.presetKey == "meituan_enterprise_meal" else { return }
+    draft.kind = .expense
+    draft.paymentMethod = "公司补贴"
+    draft.offsetEnabled = true
+    draft.offsetRatio = 100
+    draft.offsetCategoryId = ocrOffsetIncomeCategoryID(
+        in: store.flattenedCategories,
+        presetKey: parsed.presetKey
+    )
 }
 
 private func loadImages(from items: [PhotosPickerItem]) async {
@@ -574,6 +706,7 @@ private func importBillFiles(_ result: Result<[URL], Error>) async {
 }
 
 private func saveSelectedBatchItems() async {
+    if store.categories.isEmpty { await store.loadCategories() }
     let selected = store.parsedImportItems.filter { selectedBatchIDs.contains($0.id) }
     let invalid = selected.filter { ($0.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ($0.amount ?? 0) <= 0 }
     guard invalid.isEmpty else {
@@ -581,7 +714,14 @@ private func saveSelectedBatchItems() async {
         return
     }
     for item in selected {
-        var draft = TransactionDraft(parsed: item, source: pendingImportSource)
+        var draft = batchDraftOverrides[item.id] ?? makeBatchDraft(for: item)
+        if draft.offsetEnabled && draft.offsetCategoryId == nil {
+            draft.offsetCategoryId = ocrOffsetIncomeCategoryID(
+                in: store.flattenedCategories,
+                presetKey: item.presetKey
+            )
+        }
+        draft.source = pendingImportSource
         draft.ocrText = recognizedText
         if !draft.paymentMethod.isEmpty {
             draft.paymentMethod = settings.registerPaymentChannel(draft.paymentMethod) ?? draft.paymentMethod
@@ -601,11 +741,20 @@ private func saveSelectedBatchItems() async {
         clearImportState()
     } else {
         store.setPendingImportItems(remaining)
+        let remainingIDs = Set(remaining.map(\.id))
         selectedBatchIDs.removeAll()
+        batchDraftOverrides = batchDraftOverrides.filter { remainingIDs.contains($0.key) }
     }
 }
 
-private func saveSingleImport() async {
+private func saveSingleImport(presetKey: String? = nil) async {
+    if store.categories.isEmpty { await store.loadCategories() }
+    if draft.offsetEnabled && draft.offsetCategoryId == nil {
+        draft.offsetCategoryId = ocrOffsetIncomeCategoryID(
+            in: store.flattenedCategories,
+            presetKey: presetKey
+        )
+    }
     guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         importSaveError = "请填写流水标题。"
         return
@@ -615,7 +764,7 @@ private func saveSingleImport() async {
         return
     }
     if draft.offsetEnabled && draft.offsetCategoryId == nil {
-        importSaveError = "请为抵扣流水选择“报销”或“退款”分类。"
+        importSaveError = "请为抵扣流水选择“补贴”“报销”或“退款”分类。"
         return
     }
     store.errorMessage = nil
@@ -645,6 +794,7 @@ private func clearImportState() {
     importedFileNames.removeAll()
     pendingImportSource = "ocr"
     selectedBatchIDs.removeAll()
+    batchDraftOverrides.removeAll()
     draft = TransactionDraft(source: "ocr")
     pendingModeAfterDiscard = nil
 }
@@ -654,14 +804,14 @@ private struct OCRBatchItemEditor: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     let item: OCRImportResult
-    let onSave: (OCRImportResult) -> Void
+    let onSave: (OCRImportResult, TransactionDraft) -> Void
     @State private var draft: TransactionDraft
     @State private var validationMessage: String?
 
-    init(item: OCRImportResult, onSave: @escaping (OCRImportResult) -> Void) {
+    init(item: OCRImportResult, initialDraft: TransactionDraft?, onSave: @escaping (OCRImportResult, TransactionDraft) -> Void) {
         self.item = item
         self.onSave = onSave
-        _draft = State(initialValue: TransactionDraft(parsed: item, source: "ocr"))
+        _draft = State(initialValue: initialDraft ?? TransactionDraft(parsed: item, source: "ocr"))
     }
 
     var body: some View {
@@ -675,16 +825,45 @@ private struct OCRBatchItemEditor: View {
                     }
                     DatePicker("时间", selection: $draft.happenedAt)
                     TextField("商户", text: $draft.merchant)
-                    TextField("支付渠道", text: $draft.paymentMethod)
+                    PaymentChannelField(selection: $draft.paymentMethod, title: "支付渠道")
                     TextField("原价", text: $draft.originalAmount).keyboardType(.decimalPad)
                     TextField("优惠金额", text: $draft.discountAmount).keyboardType(.decimalPad)
                     TextField("溢价金额", text: $draft.premiumAmount).keyboardType(.decimalPad)
-                    Picker("分类", selection: $draft.categoryId) {
-                        Text("未分类").tag(Int?.none)
-                        ForEach(store.selectableCategories(for: draft.kind)) { category in
-                            Text(category.name).tag(Int?.some(category.id))
+                    HierarchicalCategoryPicker(
+                        title: "分类",
+                        categories: store.categories.filter { $0.flowType == draft.kind },
+                        placeholder: "未分类",
+                        helperText: nil,
+                        selectedCategoryId: $draft.categoryId,
+                        flowType: draft.kind,
+                        onCreateCategory: nil
+                    )
+                }
+                Section("账本与分账") {
+                    OCRBookSplitEditor(
+                        bookIds: $draft.bookIds,
+                        bookId: $draft.bookId,
+                        splitSettings: $draft.ledgerSplitSettings,
+                        hasExplicitSelection: $draft.hasExplicitBookSelection,
+                        manuallySelectBooks: $draft.manuallySelectBooks,
+                        books: store.books,
+                        automaticBooks: store.recommendedBooks(for: draft.happenedAt).filter {
+                            store.shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId, kind: draft.kind)
                         }
+                    )
+                    .listRowInsets(EdgeInsets())
+                    if draft.hasExplicitBookSelection && !draft.manuallySelectBooks && draft.bookIds.isEmpty {
+                        Text("不绑定账本时可使用匿名均分；首页和流水统计只计算你自己的份额。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                }
+                Section("分期") {
+                    OCRInstallmentEditor(
+                        isEnabled: $draft.installmentEnabled,
+                        months: $draft.installmentMonths,
+                        startMonth: $draft.installmentStartMonth
+                    )
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -719,12 +898,21 @@ private struct OCRBatchItemEditor: View {
                         if !draft.paymentMethod.isEmpty {
                             _ = settings.registerPaymentChannel(draft.paymentMethod)
                         }
-                        onSave(updated)
+                        onSave(updated, draft)
                         dismiss()
                     }
                 }
             }
-            .task { if store.categories.isEmpty { await store.loadCategories() } }
+            .task {
+                if store.categories.isEmpty { await store.loadCategories() }
+                if item.presetKey == "meituan_enterprise_meal", draft.offsetCategoryId == nil {
+                    draft.offsetCategoryId = ocrOffsetIncomeCategoryID(
+                        in: store.flattenedCategories,
+                        presetKey: item.presetKey
+                    )
+                }
+                if store.books.isEmpty { await store.loadBooks() }
+            }
             .alert("无法保存待确认流水", isPresented: Binding(get: { validationMessage != nil }, set: { if !$0 { validationMessage = nil } })) {
                 Button("知道了", role: .cancel) {}
             } message: { Text(validationMessage ?? "") }
@@ -743,6 +931,243 @@ private struct PaymentChannelPickerCard: View {
                 .padding(.vertical, 12)
                 .glassCard(cornerRadius: 12, strokeOpacity: 0.20)
         }
+    }
+}
+
+private struct OCRInstallmentEditor: View {
+    @Binding var isEnabled: Bool
+    @Binding var months: Int
+    @Binding var startMonth: Date
+
+    var body: some View {
+        Group {
+            Toggle("启用分期", isOn: $isEnabled)
+                .onChange(of: isEnabled) { _, enabled in
+                    if enabled && months < 2 {
+                        months = 2
+                    }
+                }
+            if isEnabled {
+                Stepper("分期月数：\(months)", value: $months, in: 2...24)
+                DatePicker("起始月份", selection: $startMonth, displayedComponents: .date)
+            }
+        }
+    }
+}
+
+private struct OCRBookSplitEditor: View {
+    @Binding var bookIds: [Int]
+    @Binding var bookId: Int?
+    @Binding var splitSettings: [Int: TransactionLedgerSplitDraft]
+    @Binding var hasExplicitSelection: Bool
+    @Binding var manuallySelectBooks: Bool
+    let books: [LedgerBook]
+    let automaticBooks: [LedgerBook]
+
+    private enum BindingMode: String, CaseIterable, Identifiable {
+        case automatic, unbound, selected
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .automatic: "自动归集"
+            case .unbound: "不绑定账本"
+            case .selected: "选择账本"
+            }
+        }
+    }
+
+    private var mode: BindingMode {
+        get {
+            guard hasExplicitSelection else { return .automatic }
+            return manuallySelectBooks ? .selected : .unbound
+        }
+        nonmutating set {
+            switch newValue {
+            case .automatic:
+                hasExplicitSelection = false
+                manuallySelectBooks = false
+                bookIds = []
+                bookId = nil
+            case .unbound:
+                hasExplicitSelection = true
+                manuallySelectBooks = false
+                bookIds = []
+                bookId = nil
+            case .selected:
+                hasExplicitSelection = true
+                manuallySelectBooks = true
+            }
+        }
+    }
+
+    private var modeBinding: Binding<BindingMode> {
+        Binding(get: { mode }, set: { mode = $0 })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("账本归集")
+                .font(.headline)
+            Picker("账本归集", selection: modeBinding) {
+                ForEach(BindingMode.allCases) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if mode == .automatic {
+                Label("按账本的自动归集规则选择账本；分账设置仍按每本账分别处理。", systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if automaticBooks.isEmpty {
+                    Text("当前流水不符合任何自动归集账本的条件。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(automaticBooks) { book in
+                        ledgerSplitCard(book)
+                    }
+                }
+            } else if mode == .unbound {
+                Label("此流水不关联主题账本。", systemImage: "tray")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("可多选；每本账本的付款人和分账成员互不影响。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(books) { book in
+                        Button { toggleBook(book) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: bookIds.contains(book.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(bookIds.contains(book.id) ? Color.accentColor : Color.secondary)
+                                Text(book.name).foregroundStyle(.primary)
+                                Spacer()
+                                Text(book.splitEnabled ? "多人分账" : "不分账")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if bookIds.contains(book.id) {
+                            ledgerSplitCard(book)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onAppear(perform: seedMissingDefaults)
+        .onChange(of: bookIds) { _, _ in seedMissingDefaults() }
+    }
+
+    @ViewBuilder
+    private func ledgerSplitCard(_ book: LedgerBook) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: book.splitEnabled ? "person.2.fill" : "person.fill")
+                    .foregroundStyle(.tint)
+                Text(book.name)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(book.splitEnabled ? "本账本独立分账" : "此账本不开分账")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if book.splitEnabled {
+                let participants = book.participants
+                Picker("付款人", selection: payerBinding(for: book, participants: participants)) {
+                    ForEach(participants) { participant in
+                        Text(participant.name).tag(participant.id)
+                    }
+                }
+                Text("参与分账成员（默认只有“我”，可选一人或多人）")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(participants) { participant in
+                    Toggle(participant.name, isOn: memberBinding(for: book, participant: participant))
+                        .font(.subheadline)
+                }
+                Text("付款人和参与成员仅作用于“\(book.name)”；不影响其他绑定账本。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("该账本未启用多人分账，保存后此账本按整笔金额统计。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func toggleBook(_ book: LedgerBook) {
+        hasExplicitSelection = true
+        if bookIds.contains(book.id) {
+            bookIds.removeAll { $0 == book.id }
+        } else {
+            bookIds.append(book.id)
+            seedDefault(for: book)
+        }
+        bookId = bookIds.first
+    }
+
+    private func seedMissingDefaults() {
+        for book in books where bookIds.contains(book.id) {
+            seedDefault(for: book)
+        }
+        bookId = bookIds.first
+    }
+
+    private func seedDefault(for book: LedgerBook) {
+        guard book.splitEnabled, splitSettings[book.id] == nil else { return }
+        let own = book.participants.first(where: { $0.name == "我" }) ?? book.participants.first
+        splitSettings[book.id] = TransactionLedgerSplitDraft(
+            payerParticipantId: own?.id,
+            splitParticipantIds: own.map { [$0.id] } ?? []
+        )
+    }
+
+    private func payerBinding(for book: LedgerBook, participants: [BookParticipant]) -> Binding<String> {
+        Binding(
+            get: {
+                splitSettings[book.id]?.payerParticipantId
+                    ?? participants.first(where: { $0.name == "我" })?.id
+                    ?? participants.first?.id
+                    ?? ""
+            },
+            set: { newValue in
+                var setting = currentSetting(for: book)
+                setting.payerParticipantId = newValue
+                splitSettings[book.id] = setting
+            }
+        )
+    }
+
+    private func memberBinding(for book: LedgerBook, participant: BookParticipant) -> Binding<Bool> {
+        Binding(
+            get: { currentSetting(for: book).splitParticipantIds.contains(participant.id) },
+            set: { enabled in
+                var setting = currentSetting(for: book)
+                if enabled, !setting.splitParticipantIds.contains(participant.id) {
+                    setting.splitParticipantIds.append(participant.id)
+                } else if !enabled, setting.splitParticipantIds.count > 1 {
+                    setting.splitParticipantIds.removeAll { $0 == participant.id }
+                }
+                splitSettings[book.id] = setting
+            }
+        )
+    }
+
+    private func currentSetting(for book: LedgerBook) -> TransactionLedgerSplitDraft {
+        if let setting = splitSettings[book.id] { return setting }
+        let own = book.participants.first(where: { $0.name == "我" }) ?? book.participants.first
+        return TransactionLedgerSplitDraft(payerParticipantId: own?.id, splitParticipantIds: own.map { [$0.id] } ?? [])
     }
 }
 
@@ -768,7 +1193,10 @@ private struct DocumentPickerView: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        // A generic data type accepts CSV/TXT/XLSX/PDF/HTML exports from both
+        // iCloud Drive and third-party Files providers. Importing as a copy
+        // avoids provider hand-off stalls when the source is cloud-backed.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
         picker.allowsMultipleSelection = true
         picker.delegate = context.coordinator
         return picker
@@ -779,6 +1207,7 @@ private struct DocumentPickerView: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: ([URL]) -> Void
         let onCancel: () -> Void
+        private var didFinish = false
 
         init(onPick: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
             self.onPick = onPick
@@ -786,13 +1215,31 @@ private struct DocumentPickerView: UIViewControllerRepresentable {
         }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            controller.dismiss(animated: true) { [onPick] in
-                onPick(urls)
+            guard !didFinish else { return }
+            didFinish = true
+            let callback = onPick
+            // 文件提供商的回调不保证和 SwiftUI 状态更新处于同一个主线程。
+            // 先在主线程关闭 sheet 并启动解析，再结束 UIKit picker；不要把
+            // 解析任务放在 dismiss completion 里，否则部分提供商不会回调它。
+            DispatchQueue.main.async {
+                callback(urls)
+                controller.dismiss(animated: true)
             }
         }
 
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            controller.dismiss(animated: true, completion: onCancel)
+            guard !didFinish else { return }
+            didFinish = true
+            let callback = onCancel
+            DispatchQueue.main.async {
+                callback()
+                controller.dismiss(animated: true)
+            }
         }
     }
 }
+     // ignored legacy brace
+        // ignored legacy close
+    // ignored legacy close
+// ignored legacy close
+// Removed stray token that broke compilation.

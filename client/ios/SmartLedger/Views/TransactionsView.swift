@@ -10,17 +10,25 @@ struct TransactionsView: View {
    @State private var pendingDeleteTransaction: LedgerTransaction?
      @State private var selectedFlow: FlowFilter = .all
      @State private var searchText = ""
-    @State private var selectedDateScope: TransactionDateScope = .recent30Days
-    @State private var selectedCategoryId: Int?
-    @State private var startDate = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+     @State private var selectedDateScope: TransactionDateScope = .thisMonth
+    @State private var selectedCategoryFilter: TransactionCategoryFilter = .all
+    @State private var showCategoryFilterSheet = false
+     @State private var startDate = TransactionDateScope.thisMonth.defaultDates.start
     @State private var endDate = Date()
     @State private var bookPopoverTransactionId: Int?
+    @State private var isBatchSelecting = false
+    @State private var selectedTransactionIDs: Set<Int> = []
+    @State private var showBatchCategoryEditor = false
+    @State private var categoryPathsByID: [Int: [String]] = [:]
+    @State private var categoryIconsByID: [Int: String] = [:]
 
    var body: some View {
-
+        let visibleTransactions = filteredTransactions
+        let visibleGroups = groupedTransactions(from: visibleTransactions)
+        let totals = transactionTotals(for: visibleTransactions)
         NavigationStack {
             List {
-                if filteredTransactions.isEmpty {
+                if visibleTransactions.isEmpty {
                     ContentUnavailableView(
                         searchText.isEmpty ? "暂无流水" : "没有匹配的流水",
                         systemImage: "list.bullet.rectangle.portrait"
@@ -28,9 +36,9 @@ struct TransactionsView: View {
                     .frame(maxWidth: .infinity, minHeight: 180)
                     .listRowBackground(Color.clear)
                 } else {
-                    summaryHeader
+                    summaryHeader(totals)
 
-                    ForEach(groupedTransactions, id: \.dateKey) { group in
+                    ForEach(visibleGroups, id: \.dateKey) { group in
                         Section {
                             ForEach(group.items, id: \.id) { tx in
                                 transactionListRow(tx)
@@ -65,17 +73,31 @@ struct TransactionsView: View {
             .scrollDismissesKeyboard(.interactively)
             .appBackground()
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-            .navigationTitle("流水")
+            .navigationTitle(isBatchSelecting ? "已选 \(selectedTransactionIDs.count) 笔" : "流水")
+            .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { Button { Task { await reloadTransactions() } } label: { Image(systemName: "arrow.clockwise") } }
-                    ToolbarItem(placement: .topBarTrailing) { Button { showCreateSheet = true } label: { Image(systemName: "plus") } }
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(isBatchSelecting ? "取消" : "选择") {
+                            isBatchSelecting.toggle()
+                            selectedTransactionIDs.removeAll()
+                        }
+                    }
+                    if isBatchSelecting {
+                        ToolbarItemGroup(placement: .topBarTrailing) {
+                            Button("全选") { selectedTransactionIDs = Set(filteredTransactions.map(\.id)) }
+                            Button("改分类") { showBatchCategoryEditor = true }
+                                .disabled(selectedTransactionIDs.isEmpty)
+                        }
+                    } else {
+                        ToolbarItem(placement: .topBarTrailing) { Button { Task { await reloadTransactions() } } label: { Image(systemName: "arrow.clockwise") } }
+                        ToolbarItem(placement: .topBarTrailing) { Button { showCreateSheet = true } label: { Image(systemName: "plus") } }
+                    }
                 }
                  .safeAreaInset(edge: .top) {
                      VStack(spacing: 10) {
                          searchBar
                          filterBar
                         categoryFilterBar
-                        customDateFilterBar
                     }
                     .padding(.horizontal)
                     .padding(.top, 8)
@@ -101,6 +123,30 @@ struct TransactionsView: View {
                     QuickBookAssignSheet(transaction: tx)
                         .environmentObject(store)
                 }
+                .sheet(isPresented: $showCategoryFilterSheet) {
+                    TransactionCategoryFilterSheet(
+                        selection: $selectedCategoryFilter,
+                        categories: transactionCategoryRoots,
+                        flowType: selectedFlow == .income ? .income : .expense
+                    )
+                    .environmentObject(store)
+                }
+                .sheet(isPresented: $showBatchCategoryEditor) {
+                    BatchCategoryEditorSheet(flowTypes: Set(store.transactions.filter { selectedTransactionIDs.contains($0.id) }.map(\.kind))) { updateExpense, expenseCategoryId, updateIncome, incomeCategoryId in
+                        var updates: [(transactionId: Int, categoryId: Int?)] = []
+                        for transaction in store.transactions where selectedTransactionIDs.contains(transaction.id) {
+                            if transaction.kind == .expense, updateExpense {
+                                updates.append((transaction.id, expenseCategoryId))
+                            } else if transaction.kind == .income, updateIncome {
+                                updates.append((transaction.id, incomeCategoryId))
+                            }
+                        }
+                        await store.batchUpdateTransactionCategories(updates)
+                        selectedTransactionIDs.removeAll()
+                        isBatchSelecting = false
+                    }
+                    .environmentObject(store)
+                }
                 .alert("删除这笔流水?", isPresented: deleteAlertBinding) {
                     Button("取消", role: .cancel) {}
                     Button("删除", role: .destructive) {
@@ -113,6 +159,7 @@ struct TransactionsView: View {
                     Text("确认删除该记录?")
                 }
                 .onAppear {
+                    rebuildCategoryCaches()
                     Task {
                         if store.transactions.isEmpty {
                             await store.loadTransactions()
@@ -120,6 +167,7 @@ struct TransactionsView: View {
                         }
                     }
                 }
+                .onChange(of: store.categories) { _, _ in rebuildCategoryCaches() }
         }
     }
 
@@ -174,63 +222,110 @@ struct TransactionsView: View {
 
     private var categoryFilterBar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Menu {
-                    ForEach(TransactionDateScope.allCases) { scope in
-                        Button(scope.title) {
-                            selectedDateScope = scope
-                            if scope != .custom { let dates = scope.defaultDates; startDate = dates.start; endDate = dates.end }
-                        }
+            HStack(spacing: 8) {
+                ForEach(TransactionDateScope.presets) { scope in
+                    Button {
+                        applyDateScope(scope)
+                    } label: {
+                        Text(scope.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(selectedDateScope == scope ? .white : .primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 9)
+                            .background(selectedDateScope == scope ? Color.accentColor : filterChipBackground, in: Capsule())
                     }
-                } label: { filterChip(title: selectedDateScope.title, systemImage: "calendar") }
+                    .buttonStyle(.plain)
+                }
 
-                Menu {
-                    Button("全部分类") { selectedCategoryId = nil }
-                    Divider()
-                    ForEach(categoryFilterOptions) { category in
-                        Button(category.displayName) { selectedCategoryId = category.id }
-                    }
-                } label: { filterChip(title: selectedCategoryTitle, systemImage: "line.3.horizontal.decrease.circle") }
+                Button {
+                    applyDateScope(.custom)
+                } label: {
+                    Label("自定义", systemImage: "calendar")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 9)
+                        .foregroundStyle(selectedDateScope == .custom ? .white : .primary)
+                        .background(selectedDateScope == .custom ? Color.accentColor : filterChipBackground, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
 
-                Spacer(minLength: 0)
-                if selectedCategoryId != nil || selectedDateScope != .recent30Days || !searchText.isEmpty {
+            if selectedDateScope == .custom {
+                HStack(spacing: 8) {
+                    DatePicker("开始", selection: $startDate, displayedComponents: .date)
+                    Image(systemName: "arrow.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    DatePicker("结束", selection: $endDate, in: startDate..., displayedComponents: .date)
+                }
+                .font(.caption)
+            }
+
+            Button {
+                showCategoryFilterSheet = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .font(.title3)
+                        .foregroundStyle(.blue)
+                    Text("分类")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text(selectedCategoryFilterTitle)
+                        .foregroundStyle(selectedCategoryFilter == .all ? Color.secondary : Color.blue)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            HStack {
+                if selectedCategoryFilter != .all || selectedDateScope != .thisMonth || selectedFlow != .all || !searchText.isEmpty {
                     Button("重置") {
-                        selectedCategoryId = nil; selectedDateScope = .recent30Days; searchText = ""
-                        let dates = TransactionDateScope.recent30Days.defaultDates; startDate = dates.start; endDate = dates.end
+                        selectedCategoryFilter = .all
+                        selectedFlow = .all
+                        searchText = ""
+                        applyDateScope(.thisMonth)
                     }.font(.caption.weight(.semibold))
                 }
-            }
-            Text(dateScopeSummary).font(.caption).foregroundStyle(.secondary)
-            if selectedDateScope == .custom {
-                HStack {
-                    DatePicker("开始", selection: $startDate, displayedComponents: .date)
-                    DatePicker("结束", selection: $endDate, in: startDate..., displayedComponents: .date)
-                }.font(.caption)
+                Spacer()
             }
         }
         .padding(12)
         .glassCard(cornerRadius: 18, strokeOpacity: 0.18)
-        .onChange(of: selectedDateScope) { _, _ in Task { await reloadTransactions() } }
-        .onChange(of: selectedCategoryId) { _, _ in Task { await reloadTransactions() } }
-        .onChange(of: startDate) { _, _ in if selectedDateScope == .custom { Task { await reloadTransactions() } } }
-        .onChange(of: endDate) { _, _ in if selectedDateScope == .custom { Task { await reloadTransactions() } } }
+        .onChange(of: selectedDateScope) { _, scope in
+            if scope != .custom {
+                let dates = scope.defaultDates
+                startDate = dates.start
+                endDate = dates.end
+            }
+        }
+        .onChange(of: selectedFlow) { _, flow in
+            guard case let .category(selectedCategoryId) = selectedCategoryFilter,
+                  let selected = store.flattenedCategories.first(where: { $0.id == selectedCategoryId }) else { return }
+            if flow != .all && selected.flowType != (flow == .income ? .income : .expense) {
+                selectedCategoryFilter = .all
+            }
+        }
     }
 
-    private var customDateFilterBar: some View { EmptyView() }
-
-	private var summaryHeader: some View {
+	private func summaryHeader(_ totals: TransactionTotals) -> some View {
 		Section {
  			VStack(spacing: 12) {
  				HStack(spacing: 12) {
- 					compactStat(title: "收入", value: totalIncome.cnyText, tint: .green)
- 					compactStat(title: "支出", value: totalExpense.cnyText, tint: .orange)
- 					compactStat(title: "净额", value: netAmount.cnyText, tint: netAmount >= 0 ? .blue : .red)
+					compactStat(title: "收入", value: totals.income.cnyText, tint: .green)
+					compactStat(title: "支出", value: totals.expense.cnyText, tint: .orange)
+					compactStat(title: "净额", value: totals.net.cnyText, tint: totals.net >= 0 ? .blue : .red)
  				}
  			}
  			.padding(.vertical, 6)
 			HStack(spacing: 12) {
-				compactStat(title: "优惠", value: filteredTransactions.compactMap(\.discountAmount).reduce(0, +).cnyText, tint: .green)
-				compactStat(title: "溢价", value: filteredTransactions.compactMap(\.premiumAmount).reduce(0, +).cnyText, tint: .red)
+				compactStat(title: "优惠", value: totals.discount.cnyText, tint: .green)
+				compactStat(title: "溢价", value: totals.premium.cnyText, tint: .red)
 			}
 		}
  		.listRowBackground(Color.clear)
@@ -255,14 +350,32 @@ struct TransactionsView: View {
 		.glassCard(cornerRadius: 18, strokeOpacity: 0.22)
 	}
     private func transactionListRow(_ tx: LedgerTransaction) -> some View {
-        transactionRow(tx)
-            .contentShape(Rectangle())
-            .onTapGesture { editingTransaction = tx }
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(role: .destructive) { pendingDeleteTransaction = tx } label: { Label("删除", systemImage: "trash") }
-                Button { quickBookTransaction = tx } label: { Label("账本", systemImage: "books.vertical") }.tint(.purple)
-                Button { quickAssignTransaction = tx } label: { Label("分类", systemImage: "tag") }.tint(.blue)
+        Group {
+            if isBatchSelecting {
+                Button {
+                    if selectedTransactionIDs.contains(tx.id) { selectedTransactionIDs.remove(tx.id) }
+                    else { selectedTransactionIDs.insert(tx.id) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: selectedTransactionIDs.contains(tx.id) ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(selectedTransactionIDs.contains(tx.id) ? .blue : .secondary)
+                        transactionRow(tx)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                transactionRow(tx)
+                    .contentShape(Rectangle())
+                    .onTapGesture { editingTransaction = tx }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) { pendingDeleteTransaction = tx } label: { Label("删除", systemImage: "trash") }
+                        Button { quickBookTransaction = tx } label: { Label("账本", systemImage: "books.vertical") }.tint(.purple)
+                        Button { quickAssignTransaction = tx } label: { Label("分类", systemImage: "tag") }.tint(.blue)
+                    }
             }
+        }
     }
 
     private func transactionRow(_ tx: LedgerTransaction) -> some View {
@@ -282,21 +395,20 @@ struct TransactionsView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.68)
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        infoPill(text: tx.categoryName ?? "未分类", systemImage: "tag")
-                        let bookNames = displayBookNames(for: tx)
-                        if bookNames.count == 1 { infoPill(text: bookNames[0], systemImage: "books.vertical", tint: .purple) }
-                        else if bookNames.count > 1 {
-                            Button { bookPopoverTransactionId = tx.id } label: { infoPill(text: "…", systemImage: "books.vertical", tint: .purple) }
-                                .buttonStyle(.plain)
-                                .popover(isPresented: Binding(get: { bookPopoverTransactionId == tx.id }, set: { if !$0 { bookPopoverTransactionId = nil } })) {
-                                    TransactionBooksPopover(bookNames: bookNames)
-                                }
-                        }
-                        if tx.source == "ocr" { infoPill(text: "OCR", systemImage: "camera.viewfinder", tint: .blue) }
-                        if tx.installmentMonths != nil { infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange) }
+                HStack(spacing: 6) {
+                    infoPill(text: tx.categoryName ?? "未分类", systemImage: "tag")
+                        .layoutPriority(1)
+                    let bookNames = displayBookNames(for: tx)
+                    if bookNames.count == 1 { infoPill(text: bookNames[0], systemImage: "books.vertical", tint: .purple) }
+                    else if bookNames.count > 1 {
+                        Button { bookPopoverTransactionId = tx.id } label: { infoPill(text: "多账本", systemImage: "books.vertical", tint: .purple) }
+                            .buttonStyle(.plain)
+                            .popover(isPresented: Binding(get: { bookPopoverTransactionId == tx.id }, set: { if !$0 { bookPopoverTransactionId = nil } })) {
+                                TransactionBooksPopover(bookNames: bookNames)
+                            }
                     }
+                    if tx.source == "ocr" { infoPill(text: "OCR", systemImage: "camera.viewfinder", tint: .blue) }
+                    if tx.installmentMonths != nil { infoPill(text: installmentText(for: tx), systemImage: "repeat.circle", tint: .orange) }
                 }
                 HStack(spacing: 12) {
                     Label(tx.happenedAt.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
@@ -391,12 +503,15 @@ struct TransactionsView: View {
  	}
  
  	private func categoryIcon(for tx: LedgerTransaction) -> String {
- 		if let categoryId = tx.categoryId,
- 		   let category = store.flattenedCategories.first(where: { $0.id == categoryId }) {
- 			return category.icon ?? "square.grid.2x2"
- 		}
- 		return "square.grid.2x2"
+		guard let categoryId = tx.categoryId else { return "square.grid.2x2" }
+		return categoryIconsByID[categoryId] ?? "square.grid.2x2"
  	}
+
+    private func rebuildCategoryCaches() {
+        let categories = store.flattenedCategories
+        categoryPathsByID = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0.pathComponents) })
+        categoryIconsByID = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0.icon ?? "square.grid.2x2") })
+    }
  
  	private func badgeColor(for tx: LedgerTransaction) -> Color {
  		tx.kind == .income ? .green : (tx.installmentMonths != nil ? .orange : .blue)
@@ -418,7 +533,12 @@ struct TransactionsView: View {
             result = result.filter { matchesSearch($0, query: query) }
         }
 
-        if let selectedCategoryId {
+        switch selectedCategoryFilter {
+        case .all:
+            break
+        case .uncategorized:
+            result = result.filter { $0.categoryId == nil }
+        case let .category(selectedCategoryId):
             result = result.filter { transaction in
                 guard let categoryId = transaction.categoryId else { return false }
                 return categoryMatchesFilter(transactionCategoryId: categoryId, selectedCategoryId: selectedCategoryId)
@@ -447,50 +567,29 @@ struct TransactionsView: View {
         return searchable.localizedCaseInsensitiveContains(query)
     }
  
- 	private var categoryFilterOptions: [LedgerCategory] {
- 		let flowScoped = store.flattenedCategories.filter { category in
- 			switch selectedFlow {
- 			case .all: return true
- 			case .expense: return category.flowType == .expense
- 			case .income: return category.flowType == .income
- 			}
- 		}
+	private var transactionCategoryRoots: [LedgerCategory] {
+		guard selectedFlow != .all else { return store.categories }
+		return store.categories.filter { $0.flowType == (selectedFlow == .income ? .income : .expense) }
+	}
+
+    private var selectedCategoryFilterTitle: String {
+        switch selectedCategoryFilter {
+        case .all:
+            return "全部分类"
+        case .uncategorized:
+            return "未分类"
+        case let .category(id):
+            return store.flattenedCategories.first(where: { $0.id == id })?.displayName ?? "指定分类"
+        }
+    }
  
- 		return flowScoped.sorted { lhs, rhs in
- 			if lhs.level == rhs.level {
- 				return lhs.name < rhs.name
- 			}
- 			return lhs.level < rhs.level
- 		}
- 	}
- 
- 	private var selectedCategoryTitle: String {
- 		guard let selectedCategoryId,
- 			  let category = store.flattenedCategories.first(where: { $0.id == selectedCategoryId }) else {
- 			return "全部分类"
- 		}
- 		return category.name
- 	}
- 
- 	private var dateScopeSummary: String {
- 		if selectedDateScope == .custom {
- 			return "\(startDate.formatted(date: .abbreviated, time: .omitted)) — \(endDate.formatted(date: .abbreviated, time: .omitted))"
- 		}
- 		return selectedDateScope.summaryText
- 	}
- 
- 	private func filterChip(title: String, systemImage: String) -> some View {
- 		Label(title, systemImage: systemImage)
- 			.font(.subheadline.weight(.semibold))
- 			.foregroundStyle(.primary)
- 			.padding(.horizontal, 12)
- 			.padding(.vertical, 10)
- 			.background(filterChipBackground, in: Capsule())
- 			.overlay {
- 				Capsule()
- 					.stroke(Color.white.opacity(colorScheme == .dark ? 0.14 : 0.28), lineWidth: 1)
- 			}
- 	}
+    private func applyDateScope(_ scope: TransactionDateScope) {
+        selectedDateScope = scope
+        guard scope != .custom else { return }
+        let dates = scope.defaultDates
+        startDate = dates.start
+        endDate = dates.end
+    }
  
  	private var groupHeaderForeground: Color {
  		colorScheme == .dark ? Color.white.opacity(0.94) : Color.black.opacity(0.78)
@@ -515,17 +614,14 @@ struct TransactionsView: View {
  	private func categoryMatchesFilter(transactionCategoryId: Int, selectedCategoryId: Int) -> Bool {
  		if transactionCategoryId == selectedCategoryId { return true }
  
- 		guard let selectedCategory = store.flattenedCategories.first(where: { $0.id == selectedCategoryId }) else {
- 			return false
- 		}
- 
- 		guard let transactionCategory = store.flattenedCategories.first(where: { $0.id == transactionCategoryId }) else { return false }
-		return transactionCategory.pathComponents.starts(with: selectedCategory.pathComponents)
+		guard let selectedPath = categoryPathsByID[selectedCategoryId],
+              let transactionPath = categoryPathsByID[transactionCategoryId] else { return false }
+		return transactionPath.starts(with: selectedPath)
  	}
  
- 	private var groupedTransactions: [TransactionDayGroup] {
+	private func groupedTransactions(from transactions: [LedgerTransaction]) -> [TransactionDayGroup] {
  		let calendar = Calendar.current
- 		let grouped = Dictionary(grouping: filteredTransactions) { calendar.startOfDay(for: $0.happenedAt) }
+		let grouped = Dictionary(grouping: transactions) { calendar.startOfDay(for: $0.happenedAt) }
  
  		return grouped
  			.map { day, items in
@@ -537,20 +633,89 @@ struct TransactionsView: View {
  			.sorted { $0.dateKey > $1.dateKey }
  	}
  
- 	private var totalIncome: Double {
-		filteredTransactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.selfShareAmount }
- 	}
- 
- 	private var totalExpense: Double {
-		filteredTransactions.filter { $0.kind == .expense }.reduce(0) { $0 + $1.selfShareAmount }
- 	}
- 
- 	private var netAmount: Double {
- 		totalIncome - totalExpense
- 	}
+    private func transactionTotals(for transactions: [LedgerTransaction]) -> TransactionTotals {
+        transactions.reduce(into: TransactionTotals()) { totals, transaction in
+            if transaction.kind == .income { totals.income += transaction.selfShareAmount }
+            else { totals.expense += transaction.selfShareAmount }
+            totals.discount += transaction.discountAmount ?? 0
+            totals.premium += transaction.premiumAmount ?? 0
+        }
+    }
  
  	private func reloadTransactions() async {
  	}
+}
+
+private struct TransactionTotals {
+    var income: Double = 0
+    var expense: Double = 0
+    var discount: Double = 0
+    var premium: Double = 0
+
+    var net: Double { income - expense }
+}
+
+struct BatchCategoryEditorSheet: View {
+    @EnvironmentObject private var store: LedgerStore
+    @Environment(\.dismiss) private var dismiss
+    let flowTypes: Set<FlowType>
+    let onSave: (Bool, Int?, Bool, Int?) async -> Void
+    @State private var applyExpense = false
+    @State private var expenseCategoryId: Int?
+    @State private var applyIncome = false
+    @State private var incomeCategoryId: Int?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if flowTypes.contains(.expense) {
+                    categorySection(title: "支出分类", enabled: $applyExpense, selection: $expenseCategoryId, flowType: .expense)
+                }
+                if flowTypes.contains(.income) {
+                    categorySection(title: "收入分类", enabled: $applyIncome, selection: $incomeCategoryId, flowType: .income)
+                }
+                Section {
+                    Text("未分类会清除所选流水当前分类；未开启修改的收支类型保持不变。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("批量改分类")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("应用") {
+                        Task {
+                            await onSave(applyExpense, expenseCategoryId, applyIncome, incomeCategoryId)
+                            dismiss()
+                        }
+                    }
+                    .disabled(!applyExpense && !applyIncome)
+                }
+            }
+            .task { if store.categories.isEmpty { await store.loadCategories() } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func categorySection(title: String, enabled: Binding<Bool>, selection: Binding<Int?>, flowType: FlowType) -> some View {
+        Section(title) {
+            Toggle("应用到所选流水", isOn: enabled)
+            if enabled.wrappedValue {
+                HierarchicalCategoryPicker(
+                    title: "分类",
+                    categories: store.categories.filter { $0.flowType == flowType },
+                    placeholder: "未分类",
+                    helperText: nil,
+                    selectedCategoryId: selection,
+                    flowType: flowType,
+                    onCreateCategory: nil
+                )
+            }
+        }
+    }
 }
 
 private struct QuickCategoryAssignSheet: View {
@@ -561,29 +726,17 @@ private struct QuickCategoryAssignSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Button {
-                        selectedCategoryId = nil
-                    } label: {
-                        HStack {
-                            Text("未分类")
-                            Spacer()
-                            if selectedCategoryId == nil {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Section("分类") {
-                    OutlineGroup(store.categories.filter { $0.flowType == transaction.kind }, children: \.outlineChildren) { category in
-                        QuickCategoryPickerRow(category: category, selectedCategoryId: $selectedCategoryId)
-                    }
+            Form {
+                Section("快速修改") {
+                    HierarchicalCategoryPicker(
+                        title: "分类",
+                        categories: store.categories.filter { $0.flowType == transaction.kind },
+                        placeholder: "未分类",
+                        helperText: "先选一级分类，再逐级进入子分类。",
+                        selectedCategoryId: $selectedCategoryId,
+                        flowType: transaction.kind,
+                        onCreateCategory: nil
+                    )
                 }
             }
             .navigationTitle("快速改分类")
@@ -604,44 +757,11 @@ private struct QuickCategoryAssignSheet: View {
             }
             .onAppear {
                 selectedCategoryId = transaction.categoryId
+                if store.categories.isEmpty {
+                    Task { await store.loadCategories() }
+                }
             }
         }
-    }
-}
-
-private struct QuickCategoryPickerRow: View {
-    let category: LedgerCategory
-    @Binding var selectedCategoryId: Int?
-
-    var body: some View {
-        Button {
-            selectedCategoryId = category.id
-        } label: {
-            rowContent(category)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func rowContent(_ item: LedgerCategory) -> some View {
-        HStack(spacing: 10) {
-            if let icon = item.icon, !icon.isEmpty {
-                Image(systemName: icon)
-                    .frame(width: 18)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(item.name)
-                .foregroundStyle(.primary)
-            Spacer()
-
-            if selectedCategoryId == item.id {
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.blue)
-            }
-        }
-        .contentShape(Rectangle())
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     }
 }
 
@@ -724,6 +844,92 @@ private struct TransactionBooksPopover: View {
     }
 }
 
+private enum TransactionCategoryFilter: Equatable {
+    case all
+    case uncategorized
+    case category(Int)
+}
+
+private struct TransactionCategoryFilterSheet: View {
+    @EnvironmentObject private var store: LedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: TransactionCategoryFilter
+    let categories: [LedgerCategory]
+    let flowType: FlowType
+    @State private var selectedCategoryId: Int?
+
+    init(selection: Binding<TransactionCategoryFilter>, categories: [LedgerCategory], flowType: FlowType) {
+        _selection = selection
+        self.categories = categories
+        self.flowType = flowType
+        let currentCategoryId: Int?
+        if case let .category(id) = selection.wrappedValue {
+            currentCategoryId = id
+        } else {
+            currentCategoryId = nil
+        }
+        _selectedCategoryId = State(initialValue: currentCategoryId)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("快速筛选") {
+                    filterOption("全部分类", subtitle: "显示已分类和未分类流水", isSelected: selection == .all) {
+                        selectedCategoryId = nil
+                        selection = .all
+                    }
+                    filterOption("未分类", subtitle: "仅显示没有指定分类的流水", isSelected: selection == .uncategorized) {
+                        selectedCategoryId = nil
+                        selection = .uncategorized
+                    }
+                }
+
+                Section("指定分类") {
+                    HierarchicalCategoryPicker(
+                        title: "选择分类",
+                        categories: categories,
+                        placeholder: "不限分类",
+                        helperText: nil,
+                        selectedCategoryId: $selectedCategoryId,
+                        flowType: flowType,
+                        onCreateCategory: nil,
+                        showsUncategorizedOption: false
+                    )
+                    .onChange(of: selectedCategoryId) { _, id in
+                        if let id { selection = .category(id) }
+                    }
+                }
+            }
+            .navigationTitle("筛选分类")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func filterOption(_ title: String, subtitle: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private enum FlowFilter: String, CaseIterable, Identifiable {
     case all
     case expense
@@ -749,16 +955,20 @@ private enum FlowFilter: String, CaseIterable, Identifiable {
 }
 
 private enum TransactionDateScope: String, CaseIterable, Identifiable {
-    case recent7Days
-    case recent30Days
+    case thisWeek
+    case thisMonth
+    case thisYear
     case custom
 
     var id: String { rawValue }
 
+    static var presets: [TransactionDateScope] { [.thisWeek, .thisMonth, .thisYear] }
+
     var title: String {
         switch self {
-        case .recent7Days: return "近 7 天"
-        case .recent30Days: return "近 30 天"
+        case .thisWeek: return "本周"
+        case .thisMonth: return "本月"
+        case .thisYear: return "本年"
         case .custom: return "自定义"
         }
     }
@@ -766,15 +976,19 @@ private enum TransactionDateScope: String, CaseIterable, Identifiable {
     var summaryText: String { title }
 
     var defaultDates: (start: Date, end: Date) {
+        var calendar = Calendar.current
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
+        let now = Date()
         switch self {
-        case .recent7Days:
-            let start = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
-            return (start, Date())
-        case .recent30Days:
-            let start = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-            return (start, Date())
+        case .thisWeek:
+            return (calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? calendar.startOfDay(for: now), now)
+        case .thisMonth:
+            return (calendar.dateInterval(of: .month, for: now)?.start ?? calendar.startOfDay(for: now), now)
+        case .thisYear:
+            return (calendar.dateInterval(of: .year, for: now)?.start ?? calendar.startOfDay(for: now), now)
         case .custom:
-            return (Date(), Date())
+            return (calendar.startOfDay(for: now), now)
         }
     }
 }

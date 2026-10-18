@@ -15,33 +15,72 @@ enum FlowType: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 enum DisplayPalette {
-    static let icons: [String] = [
-        "folder", "tag.fill", "bookmark.fill", "star.fill",
-        "fork.knife", "takeoutbag.and.cup.and.straw.fill", "cup.and.saucer.fill", "birthday.cake.fill",
-        "popcorn.fill", "cart.fill", "basket.fill", "bag.fill",
-        "car.fill", "tram.fill", "train.side.front.car", "airplane.circle.fill",
-        "bicycle", "bus.fill", "ferry.fill", "fuelpump.fill",
-        "house.fill", "house.and.flag.fill", "bed.double.fill", "lamp.floor.fill",
-        "wrench.and.screwdriver.fill", "bolt.fill", "wifi", "fan.fill",
-        "cross.case.fill", "stethoscope", "pills.fill", "bandage.fill",
-        "heart.fill", "figure.run", "dumbbell.fill", "soccerball.inverse",
-        "gift.fill", "party.popper.fill", "sparkles", "camera.fill",
-        "leaf.fill", "fish.fill", "cat.fill", "pawprint.fill",
-        "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill",
-        "text.fill",
-        "book.fill", "books.vertical.fill", "graduationcap.fill", "doc.text.fill",
-        "desktopcomputer", "laptopcomputer", "iphone", "applewatch",
-        "banknote.fill", "creditcard.fill", "wallet.pass.fill", "building.columns.fill",
-        "briefcase.fill", "shippingbox.fill", "archivebox.fill", "paperplane.fill",
-        "person.2.fill", "person.2.fill", "pawprint.fill", "leaf.fill",
-        "paintpalette.fill", "scissors", "hammer.fill", "globe.asia.australia.fill"
+    struct IconGroup: Identifiable {
+        let title: String
+        let icons: [String]
+        var id: String { title }
+    }
+
+    /// The picker is grouped by use case so related icons stay together.
+    /// This list intentionally includes every icon used by the built-in
+    /// category catalog (including icons from migrated snapshots).
+    static let iconGroups: [IconGroup] = [
+        IconGroup(title: "通用", icons: [
+            "folder", "tag.fill", "bookmark.fill", "star.fill", "sparkles", "plus.circle.fill", "ellipsis.circle.fill",
+            "calendar", "clock.fill", "clock.badge.checkmark.fill", "chart.bar.fill", "archivebox.fill", "paperplane.fill", "lock.fill", "key.fill", "square.grid.2x2"
+        ]),
+        IconGroup(title: "餐饮", icons: [
+            "fork.knife", "takeoutbag.and.cup.and.straw", "takeoutbag.and.cup.and.straw.fill", "cup.and.saucer.fill", "cup.and.saucer", "mug.fill",
+            "birthday.cake.fill", "popcorn.fill", "popcorn", "sunrise.fill", "moon.fill", "moon.stars.fill", "carrot.fill", "carrot",
+            "basket.fill", "basket", "fish.fill", "leaf.fill"
+        ]),
+        IconGroup(title: "交通", icons: [
+            "car.fill", "car", "car.side.fill", "car.side", "car.circle", "tram.fill", "tram", "train.side.front.car", "airplane", "airplane.circle.fill",
+            "airplane.departure", "bicycle", "bus.fill", "ferry.fill", "fuelpump.fill", "fuelpump", "bolt.car.fill", "parkingsign.circle.fill",
+            "road.lanes", "steeringwheel"
+        ]),
+        IconGroup(title: "居住", icons: [
+            "house.fill", "house.and.flag.fill", "building.2.fill", "building.2", "bed.double.fill", "lamp.floor.fill", "sofa.fill", "wrench.and.screwdriver.fill",
+            "wrench.and.screwdriver", "bolt.fill", "wifi", "fan.fill", "drop.fill", "flame.fill", "phone.fill", "box.truck.fill", "thermometer.sun.fill",
+            "person.badge.clock.fill"
+        ]),
+        IconGroup(title: "购物", icons: [
+            "cart.fill", "cart.badge.plus", "bag.fill", "storefront.fill", "shippingbox.fill", "gift.fill", "giftcard.fill", "tshirt.fill", "tshirt",
+            "iphone", "desktopcomputer", "laptopcomputer", "face.smiling", "figure.and.child.holdinghands", "pencil.and.list.clipboard", "diamond.fill", "scissors"
+        ]),
+        IconGroup(title: "健康", icons: [
+            "cross.case.fill", "stethoscope", "pills.fill", "bandage.fill", "heart.fill", "heart.circle.fill", "heart.text.square.fill", "heart.text.square",
+            "mouth.fill", "eye.fill", "syringe.fill", "brain.head.profile", "shield.fill"
+        ]),
+        IconGroup(title: "娱乐与兴趣", icons: [
+            "figure.run", "figure.walk", "dumbbell.fill", "soccerball.inverse", "party.popper.fill", "party.popper", "camera.fill", "music.note", "music.mic",
+            "gamecontroller.fill", "gamecontroller", "ticket.fill", "play.tv.fill", "paintpalette.fill", "cat.fill", "pawprint.fill"
+        ]),
+        IconGroup(title: "学习与工作", icons: [
+            "book.fill", "books.vertical.fill", "books.vertical", "graduationcap.fill", "graduationcap", "doc.text.fill", "checklist", "character.book.closed.fill",
+            "desktopcomputer", "laptopcomputer", "rectangle.and.pencil.and.ellipsis", "pencil.tip", "pencil.and.outline", "briefcase.fill", "c.circle.fill", "person.crop.circle.badge.checkmark"
+        ]),
+        IconGroup(title: "财务与收入", icons: [
+            "banknote.fill", "creditcard.fill", "wallet.pass.fill", "wallet.pass", "building.columns.fill", "building.columns", "percent", "receipt.fill",
+            "arrow.left.arrow.right", "arrow.uturn.backward.circle.fill", "arrow.uturn.backward.circle", "arrow.down.left.circle.fill", "chart.line.uptrend.xyaxis",
+            "chart.line.downtrend.xyaxis", "chart.pie.fill", "star.square.fill", "star.square", "person.badge.plus", "repeat.circle.fill", "arrow.2.squarepath"
+        ]),
+        IconGroup(title: "人际与其他", icons: [
+            "person.2.fill", "envelope.open.fill", "gift.fill", "hands.sparkles.fill", "globe", "globe.asia.australia.fill", "cloud.fill", "hammer.fill",
+            "paintpalette.fill", "archivebox.fill", "exclamationmark.circle.fill", "exclamationmark.triangle.fill"
+        ])
     ]
 
+    /// Flat form retained for book and other compact icon pickers.
+    static let icons: [String] = {
+        var seen = Set<String>()
+        return iconGroups.flatMap(\.icons).filter { seen.insert($0).inserted }
+    }()
+
     static let colors: [String] = [
-        "#EA6388", "#EF4444", "#EC4899", "#8B5CF6",
-        "#94A3B8", "#64748B", "#3B82F6", "#0EA5E9",
-        "#14B8A6", "#22C55E", "#F59E0B", "#F97316",
-        "#EAB308", "#EF4444", "#EC4899", "#8B5CF6"
+        "#EA6388", "#EF4444", "#F43F5E", "#EC4899", "#D946EF", "#A855F7", "#8B5CF6", "#6366F1",
+        "#3B82F6", "#0EA5E9", "#06B6D4", "#14B8A6", "#10B981", "#22C55E", "#84CC16", "#EAB308",
+        "#F59E0B", "#F97316", "#F43F5E", "#94A3B8", "#64748B", "#475569", "#334155", "#78716C"
     ]
 }
 
@@ -137,11 +176,37 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
     let parentId: Int?
     let level: Int
     let children: [LedgerCategory]
+    let sortOrder: Int
 
     enum CodingKeys: String, CodingKey {
-        case id, name, icon, color, level, children
+        case id, name, icon, color, level, children, sortOrder = "sort_order"
         case flowType = "flow_type"
         case parentId = "parent_id"
+    }
+
+    init(id: Int, name: String, flowType: FlowType, icon: String?, color: String?, parentId: Int?, level: Int, children: [LedgerCategory], sortOrder: Int = 0) {
+        self.id = id
+        self.name = name
+        self.flowType = flowType
+        self.icon = icon
+        self.color = color
+        self.parentId = parentId
+        self.level = level
+        self.children = children
+        self.sortOrder = sortOrder
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        flowType = try container.decode(FlowType.self, forKey: .flowType)
+        icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        parentId = try container.decodeIfPresent(Int.self, forKey: .parentId)
+        level = try container.decodeIfPresent(Int.self, forKey: .level) ?? 0
+        children = try container.decodeIfPresent([LedgerCategory].self, forKey: .children) ?? []
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
     }
 
     var displayName: String { name }
@@ -167,7 +232,8 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
             color: color,
             parentId: parentId,
             level: level,
-            children: []
+            children: [],
+            sortOrder: sortOrder
         )
         return [current] + children.flatMap { $0.flattened(prefix: currentPrefix) }
     }
@@ -184,7 +250,8 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
                     color: color,
                     parentId: parentId,
                     level: level,
-                    children: []
+                    children: [],
+                    sortOrder: sortOrder
                 )
             ]
         }
@@ -201,7 +268,8 @@ struct LedgerCategory: Codable, Identifiable, Hashable, Sendable {
             color: color,
             parentId: parentId,
             level: level,
-            children: []
+            children: [],
+            sortOrder: sortOrder
         )
         guard !children.isEmpty else { return [current] }
         return [current] + children.flatMap { $0.selectableFlattened(prefix: currentPrefix) }
@@ -319,6 +387,9 @@ struct BudgetItem: Codable, Identifiable, Hashable {
     let periodType: String
     let categoryId: Int?
     let categoryName: String?
+    let parentBudgetId: Int?
+    let categoryIds: [Int]?
+    let keyword: String?
     let year: Int
     let month: Int?
     let startDate: Date?
@@ -328,6 +399,9 @@ struct BudgetItem: Codable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, limitAmount, categoryId, startDate, endDate, spentAmount, usageRatio
+        case parentBudgetId = "parent_budget_id"
+        case categoryIds = "category_ids"
+        case keyword
         case periodType = "period_type"
         case categoryName = "category_name"
         case year, month
@@ -411,8 +485,8 @@ extension LedgerBook {
 }
 
 extension BudgetItem {
-    init(id: Int, name: String, limitAmount: Double, periodType: String, year: Int, month: Int?, startDate: Date?, endDate: Date?, categoryId: Int?, categoryName: String?, spentAmount: Double, usageRatio: Double) {
-        self.init(id: id, name: name, limitAmount: limitAmount, periodType: periodType, categoryId: categoryId, categoryName: categoryName, year: year, month: month, startDate: startDate, endDate: endDate, spentAmount: spentAmount, usageRatio: usageRatio)
+    init(id: Int, name: String, limitAmount: Double, periodType: String, year: Int, month: Int?, startDate: Date?, endDate: Date?, categoryId: Int?, categoryName: String?, spentAmount: Double, usageRatio: Double, parentBudgetId: Int? = nil, categoryIds: [Int]? = nil, keyword: String? = nil) {
+        self.init(id: id, name: name, limitAmount: limitAmount, periodType: periodType, categoryId: categoryId, categoryName: categoryName, parentBudgetId: parentBudgetId, categoryIds: categoryIds, keyword: keyword, year: year, month: month, startDate: startDate, endDate: endDate, spentAmount: spentAmount, usageRatio: usageRatio)
     }
 }
 
@@ -637,7 +711,7 @@ extension OCRLineItem {
 }
 
 extension OCRImportResult {
-    init(amount: Double?, kind: FlowType?, merchant: String?, paymentMethod: String?, title: String?, happenedAt: Date?, categoryKeyword: String?, categoryPath: [String]?, details: [OCRLineItem]?, confidence: Double?, rawLines: [String]?, originalAmount: Double?, discountAmount: Double?, premiumAmount: Double? = nil) {
+    init(amount: Double?, kind: FlowType?, merchant: String?, paymentMethod: String?, title: String?, happenedAt: Date?, categoryKeyword: String?, categoryPath: [String]?, details: [OCRLineItem]?, confidence: Double?, rawLines: [String]?, originalAmount: Double?, discountAmount: Double?, premiumAmount: Double? = nil, presetKey: String? = nil) {
         self.amount = amount
         self.kind = kind
         self.merchant = merchant
@@ -651,6 +725,7 @@ extension OCRImportResult {
         self.originalAmount = originalAmount
         self.discountAmount = discountAmount
         self.premiumAmount = premiumAmount
+        self.presetKey = presetKey
         self.confidence = confidence
     }
 }
@@ -673,6 +748,8 @@ struct OCRImportResult: Codable, Identifiable, Sendable {
     var discountAmount: Double?
     var premiumAmount: Double?
     var confidence: Double?
+    /// Named OCR preset used to apply narrowly-scoped defaults in the review UI.
+    var presetKey: String?
 
     enum CodingKeys: String, CodingKey {
         case amount, kind, merchant, title, details, confidence
@@ -684,6 +761,7 @@ struct OCRImportResult: Codable, Identifiable, Sendable {
         case originalAmount = "original_amount"
         case discountAmount = "discount_amount"
         case premiumAmount = "premium_amount"
+        case presetKey = "preset_key"
     }
 }
 
@@ -699,6 +777,12 @@ struct TransactionDraft {
     var bookId: Int?
     var bookIds: [Int] = []
     var bookNames: [String] = []
+    /// OCR/manual selection can hold independent split settings for every linked ledger.
+    var ledgerSplitSettings: [Int: TransactionLedgerSplitDraft] = [:]
+    /// Distinguishes an explicit empty selection (do not bind) from automatic collection.
+    var hasExplicitBookSelection: Bool = false
+    /// True when the user chose the manual multi-ledger picker, even before selecting a ledger.
+    var manuallySelectBooks: Bool = false
     var originalAmount: String = ""
     var discountAmount: String = ""
     var premiumAmount: String = ""
@@ -767,6 +851,11 @@ struct TransactionDraft {
         self.ocrText = parsed.rawLines?.joined(separator: "\n")
         self.paidByParticipantId = nil
         self.splitParticipantIds = []
+        if parsed.presetKey == "meituan_enterprise_meal" {
+            self.paymentMethod = "公司补贴"
+            self.offsetEnabled = true
+            self.offsetRatio = 100
+        }
     }
 
     func toRequest() -> CreateTransactionRequest {
@@ -793,6 +882,11 @@ struct TransactionDraft {
             splitParticipantIds: splitParticipantIds
         )
     }
+}
+
+struct TransactionLedgerSplitDraft {
+    var payerParticipantId: String?
+    var splitParticipantIds: [String]
 }
 
 struct OffsetDraft: Identifiable, Equatable {
@@ -851,6 +945,9 @@ struct BudgetDraft: Encodable, Sendable {
     var startDate: Date?
     var endDate: Date?
     var categoryId: Int?
+    var parentBudgetId: Int? = nil
+    var categoryIds: [Int]? = nil
+    var keyword: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case name, year, month
@@ -859,6 +956,9 @@ struct BudgetDraft: Encodable, Sendable {
         case startDate = "start_date"
         case endDate = "end_date"
         case categoryId = "category_id"
+        case parentBudgetId = "parent_budget_id"
+        case categoryIds = "category_ids"
+        case keyword
     }
 }
 

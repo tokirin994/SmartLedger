@@ -29,6 +29,9 @@ final class LedgerStore: ObservableObject {
     @Published var cloudSyncSchedule: CloudSyncSchedule = CloudSyncSchedule(rawValue: UserDefaults.standard.string(forKey: "smartledgerlocal.cloudSyncSchedule") ?? "periodic") ?? .periodic {
         didSet { UserDefaults.standard.set(cloudSyncSchedule.rawValue, forKey: "smartledgerlocal.cloudSyncSchedule") }
     }
+    @Published var midnightSyncEnabled: Bool = UserDefaults.standard.object(forKey: "smartledgerlocal.midnightSyncEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(midnightSyncEnabled, forKey: "smartledgerlocal.midnightSyncEnabled") }
+    }
 
     @Published var cloudAccountStatus: CloudAccountStatus = .unknown
     @Published var cloudUserRecordName: String?
@@ -50,7 +53,11 @@ final class LedgerStore: ObservableObject {
     private var hasBootstrapped = false
     private var pendingRemoteSnapshot: PersistedLedgerSnapshot?
     private var periodicSyncTask: Task<Void, Never>?
+    private var midnightSyncTask: Task<Void, Never>?
+    private var isSmartSyncInProgress = false
+    private var smartSyncRequestedWhileRunning = false
     private var lastSyncedFingerprint: String? = UserDefaults.standard.string(forKey: "smartledgerlocal.lastSyncedFingerprint")
+    private var lastLocalContentFingerprint: String?
     private var lastSyncedSnapshotUpdatedAt: Date? = {
         let stamp = UserDefaults.standard.double(forKey: "smartledgerlocal.lastSyncedSnapshotUpdatedAt")
         return stamp > 0 ? Date(timeIntervalSince1970: stamp) : nil
@@ -62,6 +69,7 @@ final class LedgerStore: ObservableObject {
     private var nextBudgetId = 100
     private var inFlightSaveKeys: Set<String> = []
     private var recentlyCompletedSaveKeys: [String: Date] = [:]
+    private var onChangeSyncTask: Task<Void, Never>?
 
     func bootstrap() async {
         guard !hasBootstrapped else { return }
@@ -98,7 +106,11 @@ final class LedgerStore: ObservableObject {
             errorMessage = "读取本地数据失败，已回退到默认数据: \(error.localizedDescription)"
         }
 
+        var categoryOrderMigrated = normalizeCategoryOrderingIfNeeded()
         if installSupplementalDefaultSubcategoriesIfNeeded() {
+            categoryOrderMigrated = true
+        }
+        if categoryOrderMigrated {
             try? await persistLocalSnapshot(markUpdatedAt: true)
         }
 
@@ -109,7 +121,7 @@ final class LedgerStore: ObservableObject {
         refreshDerivedData()
 
         if cloudSyncEnabled {
-            if cloudSyncSchedule != .onChange {
+            if cloudSyncSchedule != .onChange || midnightSyncEnabled {
                 await smartSync(showSuccessMessage: false)
             }
             configureScheduledSyncIfNeeded()
@@ -222,14 +234,17 @@ final class LedgerStore: ObservableObject {
         let categoryName = resolvedCategoryName(for: draft.categoryId)
         let bookParticipants = selectedBook?.participants ?? []
         let autoCollectBookSplit = selectedBook?.autoCollectEnabled == true && selectedBook?.splitEnabled == true
-        let defaultOwnParticipant = autoCollectBookSplit
-            && draft.splitParticipantIds.isEmpty
+        let firstBookSplitDraft = selectedBook.flatMap { draft.ledgerSplitSettings[$0.id] }
+        let firstBookParticipantIDs = firstBookSplitDraft?.splitParticipantIds ?? draft.splitParticipantIds
+        let defaultOwnParticipant = (autoCollectBookSplit || firstBookSplitDraft != nil)
+            && firstBookParticipantIDs.isEmpty
             ? (bookParticipants.first(where: { $0.name == "我" }) ?? bookParticipants.first)
             : nil
         let resolvedSplitParticipants = defaultOwnParticipant.map { [$0] }
-            ?? bookParticipants.filter { draft.splitParticipantIds.contains($0.id) }
-        let resolvedPayer = bookParticipants.first(where: { $0.id == draft.paidByParticipantId })
-            ?? defaultOwnParticipant
+            ?? bookParticipants.filter { firstBookParticipantIDs.contains($0.id) }
+        let resolvedPayerId = firstBookSplitDraft?.payerParticipantId ?? draft.paidByParticipantId
+        let resolvedPayer = bookParticipants.first(where: { $0.id == resolvedPayerId })
+            ?? (firstBookSplitDraft == nil ? defaultOwnParticipant : nil)
         let unboundSplit = selectedBook == nil && draft.splitParticipantIds.count > 1
         let resolvedSplitParticipantIDs = selectedBook == nil
             ? (unboundSplit ? draft.splitParticipantIds : [])
@@ -245,6 +260,23 @@ final class LedgerStore: ObservableObject {
             }
             guard resolvedPayer != nil else {
                 errorMessage = "账本流水请先选择付款人"
+                return
+            }
+        }
+
+        for book in resolvedBooks where book.splitEnabled {
+            let participants = book.participants
+            let own = participants.first(where: { $0.name == "我" }) ?? participants.first
+            let setting = draft.ledgerSplitSettings[book.id]
+            let memberIDs = setting?.splitParticipantIds ?? (own.map { [$0.id] } ?? [])
+            let payerID = setting?.payerParticipantId ?? own?.id
+            guard !memberIDs.isEmpty,
+                  memberIDs.allSatisfy({ id in participants.contains(where: { $0.id == id }) }) else {
+                errorMessage = "账本“\(book.name)”请至少选择 1 位有效的分账成员"
+                return
+            }
+            guard participants.contains(where: { $0.id == payerID }) else {
+                errorMessage = "账本“\(book.name)”请先选择付款人"
                 return
             }
         }
@@ -329,6 +361,8 @@ final class LedgerStore: ObservableObject {
         }
         nextTransactionId += created.count
         transactions = (created + transactions).sorted { $0.happenedAt > $1.happenedAt }
+        refreshDerivedData()
+        applyLedgerSplitDrafts(draft.ledgerSplitSettings, to: created.map(\.id), books: resolvedBooks, legacyDraft: draft)
         refreshDerivedData()
         await persistAndMaybeSync(reason: "新增流水已保存")
         completeSave(key: saveKey)
@@ -543,6 +577,56 @@ final class LedgerStore: ObservableObject {
         transactions = (generated + transactions).sorted { $0.happenedAt > $1.happenedAt }
         refreshDerivedData()
         await persistAndMaybeSync(reason: "抵扣流水已保存")
+        completeSave(key: saveKey)
+    }
+
+    /// Applies category changes as a single local transaction and sync operation.
+    /// A nil category explicitly means "uncategorized".
+    func batchUpdateTransactionCategories(_ updates: [(transactionId: Int, categoryId: Int?)]) async {
+        guard !updates.isEmpty else { return }
+        let uniqueUpdates = Dictionary(updates.map { ($0.transactionId, $0.categoryId) }, uniquingKeysWith: { _, latest in latest })
+        let saveKey = "batch-category|" + uniqueUpdates.keys.sorted().map { id in
+            let categoryID = uniqueUpdates[id] ?? nil
+            return "\(id):\(categoryID.map { String($0) } ?? "-1")"
+        }.joined(separator: ",")
+        guard beginSave(key: saveKey) else { return }
+        defer { endSave(key: saveKey) }
+
+        let currentByID = Dictionary(uniqueKeysWithValues: transactions.map { ($0.id, $0) })
+        for (transactionID, categoryID) in uniqueUpdates {
+            guard let transaction = currentByID[transactionID] else {
+                errorMessage = "部分流水已不存在，请刷新后重试。"
+                return
+            }
+            if let categoryID,
+               !flattenedCategories.contains(where: { $0.id == categoryID && $0.flowType == transaction.kind }) {
+                errorMessage = "所选分类与流水类型不匹配，请重新选择。"
+                return
+            }
+        }
+
+        transactions = transactions.map { transaction in
+            guard let categoryID = uniqueUpdates[transaction.id] else { return transaction }
+            let categoryName = categoryID.flatMap { id in flattenedCategories.first(where: { $0.id == id })?.name }
+            return rebuildTransaction(
+                transaction,
+                bookId: transaction.bookId,
+                bookName: transaction.bookName,
+                bookIds: transaction.bookIds,
+                bookNames: transaction.bookNames,
+                categoryId: categoryID,
+                categoryName: categoryName,
+                replacingCategory: true
+            )
+        }
+        for transactionID in uniqueUpdates.keys {
+            if let updatedSource = transactions.first(where: { $0.id == transactionID }), updatedSource.kind == .expense {
+                synchronizeLinkedOffsets(sourceID: transactionID, with: updatedSource)
+            }
+        }
+        errorMessage = nil
+        refreshDerivedData()
+        await persistAndMaybeSync(reason: "批量流水分类已更新")
         completeSave(key: saveKey)
     }
 
@@ -973,15 +1057,53 @@ final class LedgerStore: ObservableObject {
         startDate: draft.startDate,
         endDate: draft.endDate,
         categoryId: draft.categoryId,
-        categoryName: flattenedCategories.first(where: { $0.id == draft.categoryId })?.name,
+        categoryName: budgetCategoryLabel(draft),
         spentAmount: 0,
-        usageRatio: 0
+        usageRatio: 0,
+        parentBudgetId: draft.parentBudgetId,
+        categoryIds: draft.categoryIds,
+        keyword: draft.keyword
       )
     )
     nextBudgetId += 1
     refreshDerivedData()
     await persistAndMaybeSync(reason: "预算已保存")
     completeSave(key: saveKey)
+  }
+
+  func updateBudget(id: Int, draft: BudgetDraft) async {
+    let saveKey = "budget-update|\(id)|\(draft.name)|\(draft.limitAmount)|\(draft.categoryId ?? -1)|\(draft.categoryIds ?? [])"
+    guard beginSave(key: saveKey) else { return }
+    defer { endSave(key: saveKey) }
+    guard let index = budgets.firstIndex(where: { $0.id == id }) else { return }
+    let old = budgets[index]
+    budgets[index] = BudgetItem(
+      id: old.id, name: draft.name, limitAmount: draft.limitAmount, periodType: draft.periodType,
+      year: draft.year, month: draft.month, startDate: draft.startDate, endDate: draft.endDate,
+      categoryId: draft.categoryId, categoryName: budgetCategoryLabel(draft), spentAmount: old.spentAmount, usageRatio: old.usageRatio,
+      parentBudgetId: old.parentBudgetId, categoryIds: draft.categoryIds, keyword: draft.keyword
+    )
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "预算规则已更新")
+    completeSave(key: saveKey)
+  }
+
+  func deleteBudget(id: Int) async {
+    let saveKey = "budget-delete|\(id)"
+    guard beginSave(key: saveKey) else { return }
+    defer { endSave(key: saveKey) }
+    let ids = Set([id] + budgets.filter { $0.parentBudgetId == id }.map(\.id))
+    budgets.removeAll { ids.contains($0.id) }
+    refreshDerivedData()
+    await persistAndMaybeSync(reason: "预算及其子规则已删除")
+    completeSave(key: saveKey)
+  }
+
+  private func budgetCategoryLabel(_ draft: BudgetDraft) -> String? {
+    let ids = draft.categoryIds ?? draft.categoryId.map { [$0] } ?? []
+    guard !ids.isEmpty else { return nil }
+    let names = ids.compactMap { id in flattenedCategories.first(where: { $0.id == id })?.name }
+    return names.isEmpty ? nil : names.joined(separator: "、")
   }
 
   func createCategory(_ draft: CategoryDraft) async {
@@ -999,6 +1121,7 @@ final class LedgerStore: ObservableObject {
     }
     let parent = flattenedCategories.first(where: { $0.id == draft.parentId })
     let level = (parent?.level ?? 0) + 1
+    let siblingOrders = parent?.children.map(\.sortOrder) ?? categories.filter { $0.parentId == nil && $0.flowType == draft.flowType }.map(\.sortOrder)
     let node = LedgerCategory(
       id: nextCategoryId,
       name: name,
@@ -1007,7 +1130,8 @@ final class LedgerStore: ObservableObject {
       color: draft.color,
       parentId: draft.parentId,
       level: level,
-      children: []
+      children: [],
+      sortOrder: (siblingOrders.max() ?? -1) + 1
     )
     nextCategoryId += 1
     categories = CategoryTreeBuilder.insert(node, into: categories)
@@ -1025,7 +1149,7 @@ final class LedgerStore: ObservableObject {
       return
     }
     categories = CategoryTreeBuilder.replacing(categoryId: categoryId, in: categories) { old in
-      LedgerCategory(id: old.id, name: name, flowType: old.flowType, icon: draft.icon, color: draft.color, parentId: old.parentId, level: old.level, children: old.children)
+      LedgerCategory(id: old.id, name: name, flowType: old.flowType, icon: draft.icon, color: draft.color, parentId: old.parentId, level: old.level, children: old.children, sortOrder: old.sortOrder)
     }
     transactions = transactions.map { tx in
       guard tx.categoryId == categoryId else { return tx }
@@ -1065,6 +1189,34 @@ final class LedgerStore: ObservableObject {
     await persistAndMaybeSync(reason: "分类已删除，相关流水已归入\(destination)")
   }
 
+  /// Reorders a category among its siblings without changing its identity or bindings.
+  /// Applies the hovered destination immediately so the list can preview the new position.
+  @discardableResult
+  func moveCategoryDuringReorder(_ categoryId: Int, relativeTo targetId: Int, after: Bool) -> Bool {
+    guard categoryId != targetId else { return false }
+    let moved = CategoryTreeBuilder.moving(categoryId: categoryId, relativeTo: targetId, after: after, in: categories)
+    guard moved != categories else { return false }
+    categories = moved
+    return true
+  }
+
+  /// Commits the in-memory order once the drag is released.
+  func commitCategoryReorder() async {
+    await persistAndMaybeSync(reason: "分类顺序已调整")
+  }
+
+  func reorderCategory(_ categoryId: Int, relativeTo targetId: Int, after: Bool) async {
+    guard categoryId != targetId else { return }
+    let saveKey = "category-reorder|\(categoryId)|\(targetId)|\(after)"
+    guard beginSave(key: saveKey) else { return }
+    defer { endSave(key: saveKey) }
+    let moved = CategoryTreeBuilder.moving(categoryId: categoryId, relativeTo: targetId, after: after, in: categories)
+    guard moved != categories else { return }
+    categories = moved
+    await persistAndMaybeSync(reason: "分类顺序已调整")
+    completeSave(key: saveKey)
+  }
+
   func appendExtendedDemoData() async {
     let existingBookNames = Set(books.map(\.name))
     let newBooks = DemoData.extendedBooks(startingAt: nextBookId)
@@ -1099,11 +1251,83 @@ final class LedgerStore: ObservableObject {
 
   func findCategory(bySuggestedPath path: [String]) -> LedgerCategory? {
     guard !path.isEmpty else { return nil }
-    return selectableCategories.first(where: { $0.pathComponents == path || $0.displayName == path.last })
+    let categories = selectableCategories
+    if let exact = categories.first(where: { $0.pathComponents == path || $0.displayName == path.last }) {
+      return exact
+    }
+
+    // OCR and an account may use different names for the same category (for
+    // example, Alipay says “餐饮美食” while the user's tree says “餐饮/日常吃饭/早餐”).
+    // Prefer an exact leaf match, then choose a conservative path-similarity
+    // match rather than silently leaving a useful suggestion unassigned.
+    let normalizedQuery = path.map(normalizeCategorySuggestion)
+    if let sameLeaf = categories.first(where: {
+      normalizeCategorySuggestion($0.pathComponents.last ?? $0.name) == normalizedQuery.last
+    }) {
+      return sameLeaf
+    }
+
+    let expectedFlow: FlowType? = {
+      guard let root = normalizedQuery.first else { return nil }
+      if root.contains("收入") || root.contains("退款") || root.contains("报销") { return .income }
+      if root.contains("支出") || root.contains("餐饮") || root.contains("购物") { return .expense }
+      return nil
+    }()
+    let candidates = categories.filter { expectedFlow == nil || $0.flowType == expectedFlow }
+    let ranked = candidates.map { category -> (LedgerCategory, Int) in
+      let components = category.pathComponents.map(normalizeCategorySuggestion)
+      var score = 0
+      for (queryIndex, queryComponent) in normalizedQuery.enumerated() where !queryComponent.isEmpty {
+        for component in components where !component.isEmpty {
+          if component == queryComponent {
+            score += queryIndex == normalizedQuery.count - 1 ? 12 : 7
+          } else if queryComponent.count >= 2 && component.count >= 2 &&
+                      (queryComponent.contains(component) || component.contains(queryComponent)) {
+            score += queryIndex == normalizedQuery.count - 1 ? 5 : 3
+          }
+        }
+      }
+      return (category, score)
+    }.sorted { lhs, rhs in
+      if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+      return lhs.0.pathComponents.count < rhs.0.pathComponents.count
+    }
+    guard let best = ranked.first, best.1 >= 3 else { return nil }
+    return best.0
+  }
+
+  private func normalizeCategorySuggestion(_ value: String) -> String {
+    value.lowercased()
+      .replacingOccurrences(of: " ", with: "")
+      .replacingOccurrences(of: "美食", with: "")
+      .replacingOccurrences(of: "消费", with: "")
   }
 
   var flattenedCategories: [LedgerCategory] {
     categories.flatMap { $0.flattened() }
+  }
+
+  /// Old snapshots did not carry sortOrder. Number each sibling in its
+  /// existing serialized order once, then persist the migrated tree.
+  private func normalizeCategoryOrderingIfNeeded() -> Bool {
+    guard !categories.isEmpty, flattenedCategories.allSatisfy({ $0.sortOrder == 0 }) else { return false }
+    func normalize(_ nodes: [LedgerCategory]) -> [LedgerCategory] {
+      nodes.enumerated().map { index, node in
+        LedgerCategory(
+          id: node.id,
+          name: node.name,
+          flowType: node.flowType,
+          icon: node.icon,
+          color: node.color,
+          parentId: node.parentId,
+          level: node.level,
+          children: normalize(node.children),
+          sortOrder: index
+        )
+      }
+    }
+    categories = normalize(categories)
+    return true
   }
 
   private func categoryTreeNode(withID id: Int, in nodes: [LedgerCategory]) -> LedgerCategory? {
@@ -1251,6 +1475,18 @@ final class LedgerStore: ObservableObject {
     }
 
     func smartSync(showSuccessMessage: Bool = true) async {
+        guard !isSmartSyncInProgress else {
+            smartSyncRequestedWhileRunning = true
+            return
+        }
+        isSmartSyncInProgress = true
+        defer {
+            isSmartSyncInProgress = false
+            if smartSyncRequestedWhileRunning {
+                smartSyncRequestedWhileRunning = false
+                Task { await smartSync(showSuccessMessage: false) }
+            }
+        }
         syncState = .syncing
         await refreshCloudAccountState()
         guard cloudSyncEnabled else {
@@ -1388,13 +1624,17 @@ final class LedgerStore: ObservableObject {
         cloudSyncEnabled = enabled
         if enabled {
             lastSyncMessage = "已开启坚果云同步，准备检查 WebDAV 状态"
-            if cloudSyncSchedule != .onChange {
+            if cloudSyncSchedule != .onChange || midnightSyncEnabled {
                 await smartSync(showSuccessMessage: false)
             }
             configureScheduledSyncIfNeeded()
         } else {
             periodicSyncTask?.cancel()
             periodicSyncTask = nil
+            midnightSyncTask?.cancel()
+            midnightSyncTask = nil
+            onChangeSyncTask?.cancel()
+            onChangeSyncTask = nil
             syncState = .idle
             cloudAccountStatus = .unknown
             cloudUserRecordName = nil
@@ -1404,12 +1644,30 @@ final class LedgerStore: ObservableObject {
 
     func updateCloudSyncSchedule(_ schedule: CloudSyncSchedule) async {
         cloudSyncSchedule = schedule
+        if schedule != .onChange {
+            onChangeSyncTask?.cancel()
+            onChangeSyncTask = nil
+        }
         configureScheduledSyncIfNeeded()
         guard cloudSyncEnabled else { return }
         if schedule == .periodic || schedule == .onAppOpen {
             await smartSync(showSuccessMessage: false)
-        } else {
+        } else if schedule == .onChange {
             lastSyncMessage = "已设置为每次保存后同步"
+        } else {
+            lastSyncMessage = "已更新同步策略"
+        }
+    }
+
+    func setMidnightSyncEnabled(_ enabled: Bool) async {
+        midnightSyncEnabled = enabled
+        configureScheduledSyncIfNeeded()
+        guard cloudSyncEnabled else { return }
+        if enabled {
+            lastSyncMessage = "已开启每日 00:00 兜底同步；下次打开 App 时也会补检查"
+            await smartSync(showSuccessMessage: false)
+        } else {
+            lastSyncMessage = "已关闭每日 00:00 兜底同步"
         }
     }
 
@@ -1437,12 +1695,12 @@ final class LedgerStore: ObservableObject {
             guard !categories.contains(where: { $0.parentId == nil && $0.name == definition.name && $0.flowType == definition.flowType }) else { continue }
             let rootID = nextCategoryId
             nextCategoryId += 1
-            let children = definition.children.map { child -> LedgerCategory in
+            let children = definition.children.enumerated().map { index, child -> LedgerCategory in
                 let id = nextCategoryId
                 nextCategoryId += 1
-                return LedgerCategory(id: id, name: child.0, flowType: definition.flowType, icon: child.1, color: child.2, parentId: rootID, level: 1, children: [])
+                return LedgerCategory(id: id, name: child.0, flowType: definition.flowType, icon: child.1, color: child.2, parentId: rootID, level: 1, children: [], sortOrder: index)
             }
-            categories.append(LedgerCategory(id: rootID, name: definition.name, flowType: definition.flowType, icon: definition.icon, color: definition.color, parentId: nil, level: 0, children: children))
+            categories.append(LedgerCategory(id: rootID, name: definition.name, flowType: definition.flowType, icon: definition.icon, color: definition.color, parentId: nil, level: 0, children: children, sortOrder: (categories.map(\.sortOrder).max() ?? -1) + 1))
             inserted = true
         }
         for (rootName, childNames) in DemoData.supplementalDefaultSubcategories {
@@ -1451,7 +1709,7 @@ final class LedgerStore: ObservableObject {
                 guard category.parentId == root.id else { return nil }
                 return category.pathComponents.last
             })
-            for childName in childNames where !existingNames.contains(childName) {
+            for (index, childName) in childNames.enumerated() where !existingNames.contains(childName) {
                 let child = LedgerCategory(
                     id: nextCategoryId,
                     name: childName,
@@ -1460,7 +1718,8 @@ final class LedgerStore: ObservableObject {
                     color: root.color,
                     parentId: root.id,
                     level: root.level + 1,
-                    children: []
+                    children: [],
+                    sortOrder: (root.children.map(\.sortOrder).max() ?? -1) + 1 + index
                 )
                 nextCategoryId += 1
                 categories = CategoryTreeBuilder.insert(child, into: categories)
@@ -1482,20 +1741,20 @@ final class LedgerStore: ObservableObject {
         if let existing = children.firstIndex(where: { $0.name == "日常吃饭" }) {
             dailyIndex = existing
         } else {
-            let daily = LedgerCategory(id: nextCategoryId, name: "日常吃饭", flowType: root.flowType, icon: "takeoutbag.and.cup.and.straw", color: root.color, parentId: root.id, level: root.level + 1, children: [])
+            let daily = LedgerCategory(id: nextCategoryId, name: "日常吃饭", flowType: root.flowType, icon: "takeoutbag.and.cup.and.straw", color: root.color, parentId: root.id, level: root.level + 1, children: [], sortOrder: children.map(\.sortOrder).max().map { $0 + 1 } ?? children.count)
             nextCategoryId += 1
             children.append(daily)
             dailyIndex = children.count - 1
         }
         let daily = children[dailyIndex]
-        let nested = movable.map { meal in
-            LedgerCategory(id: meal.id, name: meal.name, flowType: meal.flowType, icon: meal.icon, color: meal.color, parentId: daily.id, level: daily.level + 1, children: meal.children)
+        let nested = movable.enumerated().map { index, meal in
+            LedgerCategory(id: meal.id, name: meal.name, flowType: meal.flowType, icon: meal.icon, color: meal.color, parentId: daily.id, level: daily.level + 1, children: meal.children, sortOrder: index)
         }
-        let updatedDaily = LedgerCategory(id: daily.id, name: daily.name, flowType: daily.flowType, icon: daily.icon, color: daily.color, parentId: daily.parentId, level: daily.level, children: daily.children + nested)
+        let updatedDaily = LedgerCategory(id: daily.id, name: daily.name, flowType: daily.flowType, icon: daily.icon, color: daily.color, parentId: daily.parentId, level: daily.level, children: daily.children + nested, sortOrder: daily.sortOrder)
         children.removeAll { mealNames.contains($0.name) }
         guard let replacementIndex = children.firstIndex(where: { $0.id == daily.id }) else { return false }
         children[replacementIndex] = updatedDaily
-        root = LedgerCategory(id: root.id, name: root.name, flowType: root.flowType, icon: root.icon, color: root.color, parentId: root.parentId, level: root.level, children: children)
+        root = LedgerCategory(id: root.id, name: root.name, flowType: root.flowType, icon: root.icon, color: root.color, parentId: root.parentId, level: root.level, children: children, sortOrder: root.sortOrder)
         categories[rootIndex] = root
         return true
     }
@@ -1568,6 +1827,49 @@ final class LedgerStore: ObservableObject {
 
     func link(for transactionId: Int, bookId: Int) -> TransactionLedgerLink? {
         transactionLedgerLinks.first { $0.transactionId == transactionId && $0.ledgerId == bookId }
+    }
+
+    private func applyLedgerSplitDrafts(_ settings: [Int: TransactionLedgerSplitDraft], to transactionIDs: [Int], books: [LedgerBook], legacyDraft: TransactionDraft) {
+        guard !books.isEmpty, !transactionIDs.isEmpty else { return }
+        for transactionID in transactionIDs {
+            for book in books {
+                guard let index = transactionLedgerLinks.firstIndex(where: { $0.transactionId == transactionID && $0.ledgerId == book.id }) else { continue }
+                guard book.splitEnabled else {
+                    transactionLedgerLinks[index].splitEnabled = false
+                    transactionLedgerLinks[index].payerParticipantId = nil
+                    transactionLedgerLinks[index].splitParticipantIds = []
+                    transactionLedgerLinks[index].splitParticipantNames = []
+                    transactionLedgerLinks[index].splitMode = .equal
+                    transactionLedgerLinks[index].splitRatio = nil
+                    transactionLedgerLinks[index].splitAmount = nil
+                    transactionLedgerLinks[index].participantSnapshot = []
+                    transactionLedgerLinks[index].isSplitCustomized = true
+                    transactionLedgerLinks[index].configVersion += 1
+                    continue
+                }
+                let participants = book.participants
+                let setting = settings[book.id]
+                let own = participants.first(where: { $0.name == "我" }) ?? participants.first
+                let selectedIDs = setting?.splitParticipantIds
+                    ?? (book.id == books.first?.id && !legacyDraft.splitParticipantIds.isEmpty
+                        ? legacyDraft.splitParticipantIds
+                        : (own.map { [$0.id] } ?? []))
+                let selected = participants.filter { selectedIDs.contains($0.id) }
+                let requestedPayer = setting?.payerParticipantId
+                    ?? (book.id == books.first?.id ? legacyDraft.paidByParticipantId : nil)
+                    ?? own?.id
+                transactionLedgerLinks[index].splitEnabled = true
+                transactionLedgerLinks[index].payerParticipantId = participants.first(where: { $0.id == requestedPayer })?.id
+                transactionLedgerLinks[index].splitParticipantIds = selected.map(\.id)
+                transactionLedgerLinks[index].splitParticipantNames = selected.map(\.name)
+                transactionLedgerLinks[index].splitMode = .equal
+                transactionLedgerLinks[index].splitRatio = nil
+                transactionLedgerLinks[index].splitAmount = nil
+                transactionLedgerLinks[index].participantSnapshot = participants.map { LedgerParticipantSnapshot(id: $0.id, name: $0.name) }
+                transactionLedgerLinks[index].isSplitCustomized = true
+                transactionLedgerLinks[index].configVersion += 1
+            }
+        }
     }
 
     func transactionsForBook(_ bookId: Int) -> [LedgerTransaction] {
@@ -1644,7 +1946,7 @@ final class LedgerStore: ObservableObject {
 
     private func resolveBooksForTransactionDraft(_ draft: TransactionDraft) -> [LedgerBook] {
         let explicitlySelectedIds = !draft.bookIds.isEmpty ? draft.bookIds : (draft.bookId.map { [$0] } ?? [])
-        if !explicitlySelectedIds.isEmpty {
+        if draft.hasExplicitBookSelection || !explicitlySelectedIds.isEmpty {
             return books.filter { explicitlySelectedIds.contains($0.id) }
         }
         let autoCollected = recommendedBooks(for: draft.happenedAt).filter { shouldAutoCollect(into: $0, date: draft.happenedAt, categoryId: draft.categoryId, kind: draft.kind) }
@@ -1811,12 +2113,33 @@ final class LedgerStore: ObservableObject {
     private func configureScheduledSyncIfNeeded() {
         periodicSyncTask?.cancel()
         periodicSyncTask = nil
-        guard cloudSyncEnabled, cloudSyncSchedule == .periodic else { return }
-        periodicSyncTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 900_000_000_000)
-                guard !Task.isCancelled else { return }
-                await self?.smartSync(showSuccessMessage: false)
+        midnightSyncTask?.cancel()
+        midnightSyncTask = nil
+        guard cloudSyncEnabled else { return }
+
+        if cloudSyncSchedule == .periodic {
+            periodicSyncTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 900_000_000_000)
+                    guard !Task.isCancelled else { return }
+                    await self?.smartSync(showSuccessMessage: false)
+                }
+            }
+        }
+        if midnightSyncEnabled {
+            midnightSyncTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    let now = Date()
+                    let nextMidnight = Calendar.current.nextDate(
+                        after: now,
+                        matching: DateComponents(hour: 0, minute: 0, second: 0),
+                        matchingPolicy: .nextTime
+                    ) ?? Calendar.current.startOfDay(for: now).addingTimeInterval(86_400)
+                    let delay = max(1, nextMidnight.timeIntervalSinceNow)
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    await self?.smartSync(showSuccessMessage: false)
+                }
             }
         }
     }
@@ -1832,6 +2155,7 @@ final class LedgerStore: ObservableObject {
         nextCategoryId = snapshot.nextCategoryId
         nextBudgetId = snapshot.nextBudgetId
         localUpdatedAt = snapshot.updatedAt
+        lastLocalContentFingerprint = snapshotContentFingerprint(snapshot)
     }
 
     /// Prevents double taps and concurrent tasks from creating duplicate data.
@@ -1857,16 +2181,38 @@ final class LedgerStore: ObservableObject {
         }
         await refreshDashboard(range: activeRangePreset, granularity: activeGranularity)
         if cloudSyncEnabled && cloudSyncSchedule == .onChange {
-            await smartSync(showSuccessMessage: false)
+            // Local persistence is complete at this point. Queue cloud sync
+            // separately so a slow WebDAV request never keeps a Save action
+            // waiting, while rapid consecutive edits are coalesced.
+            lastSyncMessage = "\(reason)，已保存本地，等待同步"
+            scheduleOnChangeSync()
         } else if cloudSyncEnabled {
             lastSyncMessage = "\(reason)，将按\(cloudSyncSchedule.title)同步"
         }
     }
 
+    private func scheduleOnChangeSync() {
+        onChangeSyncTask?.cancel()
+        onChangeSyncTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 450_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await self?.smartSync(showSuccessMessage: false)
+        }
+    }
+
     private func persistLocalSnapshot(markUpdatedAt: Bool) async throws {
         let snapshot = currentSnapshot(markUpdatedAt: markUpdatedAt)
+        let contentFingerprint = snapshotContentFingerprint(snapshot)
+        if contentFingerprint == lastLocalContentFingerprint {
+            return
+        }
         try await localStore.save(snapshot)
         localUpdatedAt = snapshot.updatedAt
+        lastLocalContentFingerprint = contentFingerprint
     }
 
     private func loadAppleProfileFromStorage() async {
@@ -1903,19 +2249,19 @@ struct DailyFinanceSummary {
     var intensity: Double { max(income, expense) }
 }
 
-private enum CategoryTreeBuilder {
+enum CategoryTreeBuilder {
     static func replacing(categoryId: Int, in tree: [LedgerCategory], transform: (LedgerCategory) -> LedgerCategory) -> [LedgerCategory] {
         tree.map { item in
             if item.id == categoryId { return transform(item) }
             guard !item.children.isEmpty else { return item }
-            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: replacing(categoryId: categoryId, in: item.children, transform: transform))
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: replacing(categoryId: categoryId, in: item.children, transform: transform), sortOrder: item.sortOrder)
         }
     }
 
     static func removing(ids: Set<Int>, from tree: [LedgerCategory]) -> [LedgerCategory] {
         tree.compactMap { item in
             guard !ids.contains(item.id) else { return nil }
-            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: removing(ids: ids, from: item.children))
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: removing(ids: ids, from: item.children), sortOrder: item.sortOrder)
         }
     }
 
@@ -1923,10 +2269,48 @@ private enum CategoryTreeBuilder {
         guard let parentId = node.parentId else { return tree + [node] }
         return tree.map { item in
             if item.id == parentId {
-                return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: item.children + [node])
+                return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: item.children + [node], sortOrder: item.sortOrder)
             }
             guard !item.children.isEmpty else { return item }
-            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: insert(node, into: item.children))
+            return LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: insert(node, into: item.children), sortOrder: item.sortOrder)
         }
     }
+
+    static func moving(categoryId: Int, relativeTo targetId: Int, after: Bool, in tree: [LedgerCategory]) -> [LedgerCategory] {
+        var didMove = false
+        func renumber(_ nodes: [LedgerCategory]) -> [LedgerCategory] {
+            nodes.enumerated().map { index, node in
+                LedgerCategory(id: node.id, name: node.name, flowType: node.flowType, icon: node.icon, color: node.color, parentId: node.parentId, level: node.level, children: node.children, sortOrder: index)
+            }
+        }
+        func visit(_ nodes: [LedgerCategory]) -> [LedgerCategory] {
+            if let sourceIndex = nodes.firstIndex(where: { $0.id == categoryId }),
+               let targetIndex = nodes.firstIndex(where: { $0.id == targetId }),
+               nodes[sourceIndex].parentId == nodes[targetIndex].parentId,
+               nodes[sourceIndex].flowType == nodes[targetIndex].flowType {
+                var reordered = nodes
+                let source = reordered.remove(at: sourceIndex)
+                guard let updatedTargetIndex = reordered.firstIndex(where: { $0.id == targetId }) else { return nodes }
+                let insertionIndex = updatedTargetIndex + (after ? 1 : 0)
+                reordered.insert(source, at: insertionIndex)
+                guard reordered != nodes else { return nodes }
+                didMove = true
+                return renumber(reordered)
+            }
+            var copy = nodes
+            for index in copy.indices where !copy[index].children.isEmpty {
+                let updatedChildren = visit(copy[index].children)
+                if didMove {
+                    let item = copy[index]
+                    copy[index] = LedgerCategory(id: item.id, name: item.name, flowType: item.flowType, icon: item.icon, color: item.color, parentId: item.parentId, level: item.level, children: updatedChildren, sortOrder: item.sortOrder)
+                    break
+                }
+            }
+            return copy
+        }
+        let result = visit(tree)
+        return didMove ? result : tree
+    }
 }
+// Legacy generated duplicate braces removed; keep the category tree builder at file scope.
+// Retained trailing note from the pre-existing local edit.

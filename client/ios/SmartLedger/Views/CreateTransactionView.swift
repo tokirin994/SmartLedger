@@ -464,7 +464,7 @@ private var totalOffsetAmount: Double { draft.offsets.reduce(0) { $0 + offsetGen
 private var combinedOffsetRatio: Double { existingOffsetRatio + totalOffsetRatio }
 private var combinedOffsetAmount: Double { existingOffsetAmount + totalOffsetAmount }
 private var offsetIncomeCategories: [LedgerCategory] {
-    store.flattenedCategories.filter { $0.flowType == .income }
+    store.categories.filter { $0.flowType == .income }
 }
 
 private func requestPayOffInstallment() {
@@ -621,21 +621,15 @@ private struct OffsetIncomeCategoryPicker: View {
     let categories: [LedgerCategory]
 
     var body: some View {
-        Picker("收入分类", selection: $categoryId) {
-            Text("请选择收入分类").tag(Int?.none)
-            ForEach(categories, id: \.id) { category in
-                OffsetIncomeCategoryPickerItem(category: category)
-            }
-        }
-    }
-}
-
-private struct OffsetIncomeCategoryPickerItem: View {
-    let category: LedgerCategory
-
-    var body: some View {
-        let categoryId: Int? = category.id
-        Text(category.displayName).tag(categoryId)
+        HierarchicalCategoryPicker(
+            title: "收入分类",
+            categories: categories,
+            placeholder: "请选择收入分类",
+            helperText: nil,
+            selectedCategoryId: $categoryId,
+            flowType: .income,
+            onCreateCategory: nil
+        )
     }
 }
 
@@ -1160,6 +1154,7 @@ struct HierarchicalCategoryPicker: View {
     let onCreateCategory: ((Int?) -> Void)?
     /// 叶子节点会直接完成选择；有子节点时才进入下一级。
     var allowsDescendantSelection: Bool = true
+    var showsUncategorizedOption: Bool = true
 
     @State private var isPresenting = false
 
@@ -1200,7 +1195,8 @@ struct HierarchicalCategoryPicker: View {
                     isRoot: true,
                     flowType: flowType,
                     onCreateCategory: onCreateCategory,
-                    allowsDescendantSelection: allowsDescendantSelection
+                    allowsDescendantSelection: allowsDescendantSelection,
+                    showsUncategorizedOption: showsUncategorizedOption
                 )
             }
         }
@@ -1236,10 +1232,11 @@ private struct CategoryLevelPickerView: View {
     let flowType: FlowType
     let onCreateCategory: ((Int?) -> Void)?
     let allowsDescendantSelection: Bool
+    let showsUncategorizedOption: Bool
 
     var body: some View {
         List {
-            if isRoot {
+            if isRoot && showsUncategorizedOption {
                 Section {
                     Button {
                         selectedCategoryId = nil

@@ -141,6 +141,7 @@ private struct BookDetailView: View {
     @State private var editingTransaction: LedgerTransaction?
     @State private var exportFormat: BookExportFormat?
     @State private var showExportFormatPicker = false
+    @State private var pendingExportFormat: BookExportFormat?
 
     private var relatedTransactions: [LedgerTransaction] { store.transactionsForBook(book.id).sorted { $0.happenedAt > $1.happenedAt } }
     private var current: LedgerBook { store.books.first(where: { $0.id == book.id }) ?? book }
@@ -149,7 +150,7 @@ private struct BookDetailView: View {
     private var splitTransactions: [LedgerTransaction] { relatedTransactions.filter { $0.kind == .expense && !$0.splitParticipantIds.isEmpty } }
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(current.note?.isEmpty == false ? current.note! : "将相关流水归集在一起").foregroundStyle(.secondary)
                     HStack(spacing: 10) { metric("支出", current.expenseAmount.cnyText, .orange); metric("收入", current.incomeAmount.cnyText, .green); metric("净额", current.balance.cnyText, current.balance < 0 ? .red : .blue) }
@@ -173,13 +174,21 @@ private struct BookDetailView: View {
             CreateTransactionView(editingTransaction: transaction)
                 .environmentObject(store)
         }
-        .fileExporter(isPresented: Binding(get: { exportFormat != nil }, set: { if !$0 { exportFormat = nil } }), document: BookExportDocument(book: current, transactions: relatedTransactions, format: exportFormat ?? .markdown), contentType: exportFormat?.contentType ?? .plainText, defaultFilename: "\(current.name).\(exportFormat?.fileExtension ?? "md")") { _ in exportFormat = nil }
-        .confirmationDialog("选择导出格式", isPresented: $showExportFormatPicker, titleVisibility: .visible) {
-            Button("导出 HTML 报告") { exportFormat = .html }
-            Button("导出 Markdown") { exportFormat = .markdown }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("HTML 适合直接打开或打印，Markdown 适合继续编辑。")
+        .fileExporter(isPresented: Binding(get: { exportFormat != nil }, set: { if !$0 { exportFormat = nil } }), document: BookExportDocument(book: current, transactions: relatedTransactions, ledgerLinks: Dictionary(uniqueKeysWithValues: relatedTransactions.compactMap { transaction in store.link(for: transaction.id, bookId: current.id).map { (transaction.id, $0) } }), format: exportFormat ?? .markdown), contentType: exportFormat?.contentType ?? .plainText, defaultFilename: "\(current.name).\(exportFormat?.fileExtension ?? "md")") { _ in exportFormat = nil }
+        .sheet(isPresented: $showExportFormatPicker, onDismiss: {
+            guard let format = pendingExportFormat else { return }
+            pendingExportFormat = nil
+            exportFormat = format
+        }) {
+            BookExportFormatPicker(
+                onSelect: { format in
+                    pendingExportFormat = format
+                    showExportFormatPicker = false
+                },
+                onCancel: { showExportFormatPicker = false }
+            )
+            .presentationDetents([.height(330)])
+            .presentationDragIndicator(.visible)
         }
         .alert("删除账本？", isPresented: $deleteRequested) { Button("取消", role: .cancel) {}; Button("删除", role: .destructive) { Task { await store.deleteBook(current.id) }; dismiss() } } message: { Text("删除账本不会删除流水，只会移除关联。") }
     }
@@ -215,7 +224,7 @@ private struct BookDetailView: View {
         .glassCard(cornerRadius: 20, strokeOpacity: 0.15)
     }
     private var transactionsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        LazyVStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("归集流水").font(.title3.bold())
                 Spacer()
@@ -244,6 +253,7 @@ private struct BookTransactionSwipeRow: View {
     let onEdit: () -> Void
     @State private var isActionRevealed = false
     @GestureState private var dragOffset: CGFloat = 0
+    @State private var isRemovingAssociation = false
 
     private var amountText: String { (transaction.kind == .expense ? -transaction.amount : transaction.amount).cnyText }
     private var amountColor: Color { transaction.kind == .expense ? .primary : .green }
@@ -255,7 +265,17 @@ private struct BookTransactionSwipeRow: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(role: .destructive) {
-                withAnimation(.snappy) { isActionRevealed = false }
+                guard !isRemovingAssociation else { return }
+                isRemovingAssociation = true
+                // Close the custom swipe state before removing the row. Keeping
+                // the translated row alive while the parent ScrollView is
+                // reconciling its contents can leave the next vertical drag
+                // competing with the just-finished horizontal gesture.
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
+                    isActionRevealed = false
+                }
                 onRemove()
             } label: {
                 VStack(spacing: 5) {
@@ -289,16 +309,29 @@ private struct BookTransactionSwipeRow: View {
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.primary.opacity(0.08), lineWidth: 1) }
             .offset(x: contentOffset)
+            // Drag translation follows the finger without interpolation; only
+            // the committed open/closed state owns the single settling animation.
+            .animation(isRemovingAssociation ? nil : .snappy(duration: 0.22), value: isActionRevealed)
             .onTapGesture {
-                guard !isActionRevealed else { return }
+                guard !isActionRevealed, !isRemovingAssociation else { return }
                 onEdit()
             }
-            .gesture(
-                DragGesture(minimumDistance: 12)
-                    .updating($dragOffset) { value, state, _ in state = value.translation.width }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20)
+                    .updating($dragOffset) { value, state, _ in
+                        // Track only horizontal movement. GestureState resets even
+                        // when SwiftUI cancels this recognizer for vertical scrolling.
+                        state = abs(value.translation.width) > abs(value.translation.height) * 1.2
+                            ? value.translation.width
+                            : 0
+                    }
                     .onEnded { value in
-                        withAnimation(.snappy) {
-                            let projected = (isActionRevealed ? -96 : 0) + value.predictedEndTranslation.width
+                        guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else {
+                            return
+                        }
+                        let projected = (isActionRevealed ? -96 : 0) + value.predictedEndTranslation.width
+                        let transaction = Transaction(animation: nil)
+                        withTransaction(transaction) {
                             isActionRevealed = projected < -48
                         }
                     }
@@ -313,13 +346,79 @@ private enum BookExportFormat: Equatable {
     case markdown, html
     var contentType: UTType { self == .markdown ? .plainText : .html }
     var fileExtension: String { self == .markdown ? "md" : "html" }
+    var title: String { self == .html ? "HTML 报告" : "Markdown 文档" }
+    var subtitle: String {
+        self == .html ? "精美排版，适合直接查看、分享或打印" : "纯文本格式，适合继续编辑和版本管理"
+    }
+    var systemImage: String { self == .html ? "doc.richtext" : "doc.text" }
+}
+
+private struct BookExportFormatPicker: View {
+    let onSelect: (BookExportFormat) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Text("选择导出格式")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                formatButton(.html, tint: .blue)
+                formatButton(.markdown, tint: .indigo)
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .navigationTitle("导出账本")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+            }
+        }
+    }
+
+    private func formatButton(_ format: BookExportFormat, tint: Color) -> some View {
+        Button { onSelect(format) } label: {
+            HStack(spacing: 14) {
+                Image(systemName: format.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(tint)
+                    .frame(width: 46, height: 46)
+                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(format.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(format.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 4)
+                Text(".\(format.fileExtension)")
+                    .font(.caption.monospaced().weight(.medium))
+                    .foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.primary.opacity(0.07), lineWidth: 1) }
+            .contentShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 private struct BookExportDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.plainText, .html] }
     let text: String
 
-    init(book: LedgerBook, transactions: [LedgerTransaction], format: BookExportFormat) {
+    init(book: LedgerBook, transactions: [LedgerTransaction], ledgerLinks: [Int: TransactionLedgerLink], format: BookExportFormat) {
         let discount = transactions.compactMap(\.discountAmount).reduce(0, +)
         let premium = transactions.compactMap(\.premiumAmount).reduce(0, +)
         let period = Self.periodText(for: book)
@@ -327,14 +426,63 @@ private struct BookExportDocument: FileDocument {
             let sign = transaction.kind == .expense ? "-" : "+"
             let category = transaction.categoryName ?? "未分类"
             let date = transaction.happenedAt.formatted(date: .abbreviated, time: .shortened)
-            return "| \(date) | \(transaction.title) | \(category) | \(sign)\(transaction.amount.cnyText) | \(transaction.note ?? "") |"
+            let split = Self.splitDescription(for: transaction, book: book, link: ledgerLinks[transaction.id])
+            return "| \(Self.markdownCell(date)) | \(Self.markdownCell(transaction.title)) | \(Self.markdownCell(category)) | \(sign)\(transaction.amount.cnyText) | \(Self.markdownCell(split.markdown)) | \(Self.markdownCell(transaction.note ?? "")) |"
         }.joined(separator: "\n")
-        let markdown = "# \(book.name)\n\n> 账本期间：\(period)\n\n## 汇总\n\n- 支出：\(book.expenseAmount.cnyText)\n- 收入：\(book.incomeAmount.cnyText)\n- 净额：\(book.balance.cnyText)\n- 优惠：\(discount.cnyText)\n- 溢价：\(premium.cnyText)\n\n## 流水\n\n| 时间 | 标题 | 分类 | 金额 | 备注 |\n|---|---|---|---:|---|\n\(rows)\n"
+        let markdown = "# \(Self.markdownCell(book.name))\n\n> 账本期间：\(Self.markdownCell(period))\n\n## 汇总\n\n- 支出：\(book.expenseAmount.cnyText)\n- 收入：\(book.incomeAmount.cnyText)\n- 净额：\(book.balance.cnyText)\n- 优惠：\(discount.cnyText)\n- 溢价：\(premium.cnyText)\n\n## 流水\n\n| 时间 | 标题 | 分类 | 金额 | 付款人 / 分账成员及金额 | 备注 |\n|---|---|---|---:|---|---|\n\(rows)\n"
         if format == .markdown {
             self.text = markdown
         } else {
-            self.text = Self.htmlReport(book: book, transactions: transactions, period: period, discount: discount, premium: premium)
+            self.text = Self.htmlReport(book: book, transactions: transactions, ledgerLinks: ledgerLinks, period: period, discount: discount, premium: premium)
         }
+    }
+
+    private static func markdownCell(_ value: String) -> String {
+        value.replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private static func splitDescription(for transaction: LedgerTransaction, book: LedgerBook, link: TransactionLedgerLink?) -> (markdown: String, html: String) {
+        guard transaction.kind == .expense else { return ("—", "—") }
+        let enabled = link?.splitEnabled ?? !transaction.splitParticipantIds.isEmpty
+        guard enabled else { return ("—", "—") }
+
+        let participantIDs = link?.splitParticipantIds ?? transaction.splitParticipantIds
+        let savedNames = link?.splitParticipantNames ?? transaction.splitParticipantNames
+        let snapshotNames = Dictionary((link?.participantSnapshot ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { _, newest in newest })
+        let bookNames = Dictionary(book.participants.map { ($0.id, $0.name) }, uniquingKeysWith: { _, newest in newest })
+        let participantNames = participantIDs.enumerated().map { index, id in
+            if savedNames.indices.contains(index), !savedNames[index].isEmpty { return savedNames[index] }
+            return snapshotNames[id] ?? bookNames[id] ?? id
+        }
+        let displayedNames = participantNames.isEmpty ? savedNames : participantNames
+        let payerID = link?.payerParticipantId ?? transaction.paidByParticipantId
+        let payerName = payerID.flatMap { snapshotNames[$0] ?? bookNames[$0] }
+            ?? transaction.paidByParticipantName
+            ?? payerID
+        let payer = payerName.map { "付款：\($0)" }
+        let memberText: String
+        let shareText: String?
+        let shareCount = participantIDs.isEmpty ? displayedNames.count : participantIDs.count
+        if (link?.splitMode ?? .equal) == .equal, shareCount > 0 {
+            let eachShare = transaction.amount / Double(shareCount)
+            memberText = "参与：\(displayedNames.joined(separator: "、"))（均分，每人 \(eachShare.cnyText)）"
+            shareText = nil
+        } else {
+            memberText = displayedNames.isEmpty ? "参与者信息未记录" : "参与：\(displayedNames.joined(separator: "、"))"
+            if let link, let ownShare = link.selfShareAmount(for: transaction.amount) {
+                shareText = "本人承担：\(ownShare.cnyText)"
+            } else if !transaction.splitParticipantIds.isEmpty,
+                      transaction.splitParticipantIds.contains("我") || transaction.splitParticipantNames.contains("我") {
+                shareText = "本人承担：\(transaction.selfShareAmount.cnyText)"
+            } else {
+                shareText = nil
+            }
+        }
+        let values = [payer, Optional(memberText), shareText].compactMap { $0 }
+        let text = values.joined(separator: "；")
+        return (text, escape(text))
     }
 
     private static func periodText(for book: LedgerBook) -> String {
@@ -350,7 +498,7 @@ private struct BookExportDocument: FileDocument {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    private static func htmlReport(book: LedgerBook, transactions: [LedgerTransaction], period: String, discount: Double, premium: Double) -> String {
+    private static func htmlReport(book: LedgerBook, transactions: [LedgerTransaction], ledgerLinks: [Int: TransactionLedgerLink], period: String, discount: Double, premium: Double) -> String {
         let expense = transactions.filter { $0.kind == .expense }.reduce(0) { $0 + $1.amount }
         let income = transactions.filter { $0.kind == .income }.reduce(0) { $0 + $1.amount }
         let categories = Dictionary(grouping: transactions.filter { $0.kind == .expense }, by: { $0.categoryName ?? "未分类" })
@@ -374,18 +522,19 @@ private struct BookExportDocument: FileDocument {
             let premiumText = transaction.premiumAmount.map { "溢价 \($0.cnyText)" } ?? ""
             let adjustmentText = [discountText, premiumText].filter { !$0.isEmpty }.joined(separator: " · ")
             let adjustmentMarkup = adjustmentText.isEmpty ? "" : "<small>\(escape(adjustmentText))</small>"
-            return "<tr><td>\(escape(date))</td><td><strong>\(escape(transaction.title))</strong><small>\(escape(transaction.note ?? ""))</small></td><td><span class=\"tag\">\(escape(transaction.categoryName ?? "未分类"))</span></td><td class=\"amount \(isExpense ? "expense" : "income")\">\(amount)\(adjustmentMarkup)</td></tr>"
+            let split = splitDescription(for: transaction, book: book, link: ledgerLinks[transaction.id])
+            return "<tr><td>\(escape(date))</td><td><strong>\(escape(transaction.title))</strong><small>\(escape(transaction.note ?? ""))</small></td><td><span class=\"tag\">\(escape(transaction.categoryName ?? "未分类"))</span></td><td class=\"split-info\">\(split.html)</td><td class=\"amount \(isExpense ? "expense" : "income")\">\(amount)\(adjustmentMarkup)</td></tr>"
         }.joined()
         return """
         <!doctype html>
         <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\(escape(book.name)) · 账本报告</title>
         <style>
-        :root{color-scheme:light;--ink:#172033;--muted:#718096;--line:#e8edf5;--blue:#4f7cff;--green:#20b779;--orange:#f59a3d;--red:#e85d75}*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC",sans-serif;line-height:1.5}.page{max-width:980px;margin:0 auto;padding:42px 22px 64px}.hero{padding:38px 40px;border-radius:28px;background:linear-gradient(135deg,#3867f4,#7c5ce8);color:#fff;box-shadow:0 18px 48px rgba(61,91,205,.25)}.eyebrow{opacity:.76;font-size:13px;letter-spacing:1.5px}.hero h1{margin:8px 0 5px;font-size:36px;letter-spacing:-.8px}.hero p{margin:0;opacity:.85}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}.card,.section{background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 8px 25px rgba(32,55,90,.06)}.card{padding:18px}.card span{display:block;color:var(--muted);font-size:13px}.card strong{display:block;margin-top:6px;font-size:22px}.card.expense strong{color:var(--orange)}.card.income strong{color:var(--green)}.card.balance strong{color:var(--blue)}.section{padding:25px 26px;margin-top:18px}.section h2{font-size:19px;margin:0 0 18px}.category-row{margin:12px 0}.category-label{display:flex;justify-content:space-between;font-size:14px}.category-label strong{font-weight:600}.bar{height:9px;background:#edf1f7;border-radius:8px;margin-top:7px;overflow:hidden}.bar i{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#5a83ff,#8d6df1)}.member-row{display:grid;grid-template-columns:1.3fr 1fr 1fr;padding:12px 0;border-bottom:1px solid var(--line);color:var(--muted)}.member-row:last-child{border-bottom:0}.member-row b{color:var(--ink)}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:650px}th{color:var(--muted);font-size:12px;font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}td{padding:14px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}td small{display:block;color:var(--muted);margin-top:3px}.tag{display:inline-block;background:#eef3ff;color:#456ee2;padding:4px 9px;border-radius:999px;font-size:12px}.amount{text-align:right;font-weight:700}.amount.expense{color:var(--orange)}.amount.income{color:var(--green)}.footer{text-align:center;color:var(--muted);font-size:12px;margin-top:26px}@media(max-width:700px){.page{padding:20px 14px 42px}.hero{padding:27px 24px;border-radius:22px}.hero h1{font-size:28px}.grid{grid-template-columns:repeat(2,1fr)}.section{padding:20px 16px}.member-row{grid-template-columns:1fr;gap:4px}}
+        :root{color-scheme:light;--ink:#172033;--muted:#718096;--line:#e8edf5;--blue:#4f7cff;--green:#20b779;--orange:#f59a3d;--red:#e85d75}*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC",sans-serif;line-height:1.5}.page{max-width:980px;margin:0 auto;padding:42px 22px 64px}.hero{padding:38px 40px;border-radius:28px;background:linear-gradient(135deg,#3867f4,#7c5ce8);color:#fff;box-shadow:0 18px 48px rgba(61,91,205,.25)}.eyebrow{opacity:.76;font-size:13px;letter-spacing:1.5px}.hero h1{margin:8px 0 5px;font-size:36px;letter-spacing:-.8px}.hero p{margin:0;opacity:.85}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:22px 0}.card,.section{background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 8px 25px rgba(32,55,90,.06)}.card{padding:18px}.card span{display:block;color:var(--muted);font-size:13px}.card strong{display:block;margin-top:6px;font-size:22px}.card.expense strong{color:var(--orange)}.card.income strong{color:var(--green)}.card.balance strong{color:var(--blue)}.section{padding:25px 26px;margin-top:18px}.section h2{font-size:19px;margin:0 0 18px}.category-row{margin:12px 0}.category-label{display:flex;justify-content:space-between;font-size:14px}.category-label strong{font-weight:600}.bar{height:9px;background:#edf1f7;border-radius:8px;margin-top:7px;overflow:hidden}.bar i{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#5a83ff,#8d6df1)}.member-row{display:grid;grid-template-columns:1.3fr 1fr 1fr;padding:12px 0;border-bottom:1px solid var(--line);color:var(--muted)}.member-row:last-child{border-bottom:0}.member-row b{color:var(--ink)}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:820px}th{color:var(--muted);font-size:12px;font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}td{padding:14px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}td small{display:block;color:var(--muted);margin-top:3px}.split-info{min-width:210px;color:#53627b}.tag{display:inline-block;background:#eef3ff;color:#456ee2;padding:4px 9px;border-radius:999px;font-size:12px}.amount{text-align:right;font-weight:700}.amount.expense{color:var(--orange)}.amount.income{color:var(--green)}.footer{text-align:center;color:var(--muted);font-size:12px;margin-top:26px}@media(max-width:700px){.page{padding:20px 14px 42px}.hero{padding:27px 24px;border-radius:22px}.hero h1{font-size:28px}.grid{grid-template-columns:repeat(2,1fr)}.section{padding:20px 16px}.member-row{grid-template-columns:1fr;gap:4px}}
         </style></head><body><main class="page"><header class="hero"><div class="eyebrow">SMART LEDGER · FINANCIAL REPORT</div><h1>\(escape(book.name))</h1><p>账本期间：\(escape(period)) · 共 \(transactions.count) 笔流水</p></header>
         <section class="grid"><div class="card expense"><span>总支出</span><strong>\(expense.cnyText)</strong></div><div class="card income"><span>总收入</span><strong>\(income.cnyText)</strong></div><div class="card balance"><span>净额</span><strong>\(book.balance.cnyText)</strong></div><div class="card"><span>优惠 / 溢价</span><strong>\(discount.cnyText) / \(premium.cnyText)</strong></div></section>
         <section class="section"><h2>分类支出</h2>\(categoryRows.isEmpty ? "<p style=\"color:var(--muted)\">暂无支出分类</p>" : categoryRows)</section>
         \(memberRows.isEmpty ? "" : "<section class=\"section\"><h2>分账概览</h2>\(memberRows)</section>")
-        <section class="section"><h2>流水明细</h2><div class="table-wrap"><table><thead><tr><th>时间</th><th>标题 / 备注</th><th>分类</th><th style="text-align:right">金额</th></tr></thead><tbody>\(transactionRows.isEmpty ? "<tr><td colspan=\"4\">暂无流水</td></tr>" : transactionRows)</tbody></table></div></section><div class="footer">由 Smart Ledger 生成 · \(Date.now.formatted(date: .abbreviated, time: .shortened))</div></main></body></html>
+        <section class="section"><h2>流水明细</h2><div class="table-wrap"><table><thead><tr><th>时间</th><th>标题 / 备注</th><th>分类</th><th>付款人 / 分账成员及金额</th><th style="text-align:right">金额</th></tr></thead><tbody>\(transactionRows.isEmpty ? "<tr><td colspan=\"5\">暂无流水</td></tr>" : transactionRows)</tbody></table></div></section><div class="footer">由 Smart Ledger 生成 · \(Date.now.formatted(date: .abbreviated, time: .shortened))</div></main></body></html>
         """
     }
 
@@ -644,7 +793,9 @@ private struct BookAutoCollectCategoryPicker: View {
         _selectedIDs = State(initialValue: initialSelectedIDs)
     }
 
-    private var rootCategories: [LedgerCategory] { store.categories.sorted { $0.name < $1.name } }
+    // LedgerStore preserves the user-defined sibling order. Do not sort by
+    // display name here or the picker would disagree with Settings/流水.
+    private var rootCategories: [LedgerCategory] { store.categories }
     private var displayedRoots: [LedgerCategory] {
         rootCategories.filter { flowFilter == .all || $0.flowType == flowFilter.flowType }
     }
@@ -822,3 +973,12 @@ private enum AutoCollectFlowFilter: String, CaseIterable, Identifiable {
     var title: String { self == .all ? "全部" : (self == .expense ? "支出" : "收入") }
     var flowType: FlowType? { self == .expense ? .expense : (self == .income ? .income : nil) }
 }
+
+
+// invalid generated tail removed
+// self == .all ? "全部" : (self == .expense ? "支出" : "收入") }
+// var flowType: FlowType? { self == .expense ? .expense : (self == .income ? .income : nil) }
+// }
+
+
+// invalid generated tail removed

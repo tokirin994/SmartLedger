@@ -50,6 +50,13 @@ struct SettingsView: View {
                         Text(schedule.title).tag(schedule)
                     }
                 }
+                Toggle("每天 00:00 兜底同步", isOn: Binding(
+                    get: { store.midnightSyncEnabled },
+                    set: { enabled in Task { await store.setMidnightSyncEnabled(enabled) } }
+                ))
+                Text("与上面的同步策略并行。App 在前台运行时按本地时间尝试；若 iOS 当时挂起 App，会在下次打开时补检查。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 DisclosureGroup("配置与诊断", isExpanded: $cloudConfigurationExpanded) {
                     TextField("WebDAV 地址", text: $settings.jianguoyunEndpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
@@ -89,12 +96,51 @@ struct SettingsView: View {
             }
 
             Section("支付渠道") {
-                if settings.paymentChannels.isEmpty { Text("暂无").foregroundStyle(.secondary) }
-                ForEach(settings.paymentChannels, id: \.self) { channel in
-                    Label(channel, systemImage: "creditcard")
-                        .swipeActions { Button(role: .destructive) { settings.removePaymentChannel(channel) } label: { Label("删除", systemImage: "trash") } }
+                if settings.paymentChannels.isEmpty {
+                    ContentUnavailableView("暂无支付渠道", systemImage: "creditcard", description: Text("添加常用渠道后，可在流水编辑时快速选择。"))
+                        .listRowBackground(Color.clear)
+                } else {
+                    Text("常用渠道 · \(settings.paymentChannels.count)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .listRowSeparator(.hidden)
+                    ForEach(settings.paymentChannels, id: \.self) { channel in
+                        HStack(spacing: 12) {
+                            Image(systemName: "creditcard.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(width: 34, height: 34)
+                                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                            Text(channel)
+                                .font(.body.weight(.medium))
+                            Spacer(minLength: 8)
+                            Button(role: .destructive) {
+                                settings.removePaymentChannel(channel)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .frame(width: 34, height: 34)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("删除\(channel)")
+                        }
+                        .padding(.vertical, 3)
+                        .listRowSeparator(.hidden)
+                    }
                 }
-                HStack { TextField("新增支付渠道", text: $newChannel); Button("添加") { if settings.registerPaymentChannel(newChannel) != nil { newChannel = "" } } }
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                    TextField("添加支付渠道", text: $newChannel)
+                        .textInputAutocapitalization(.never)
+                        .submitLabel(.done)
+                        .onSubmit(addPaymentChannel)
+                    Button("添加", action: addPaymentChannel)
+                        .fontWeight(.semibold)
+                        .disabled(newChannel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.vertical, 4)
             }
 
             Section("账本归属") {
@@ -131,5 +177,10 @@ struct SettingsView: View {
         .alert("模拟数据", isPresented: Binding(get: { demoMessage != nil }, set: { if !$0 { demoMessage = nil } })) {
             Button("知道了", role: .cancel) {}
         } message: { Text(demoMessage ?? "") }
+    }
+
+    private func addPaymentChannel() {
+        guard settings.registerPaymentChannel(newChannel) != nil else { return }
+        newChannel = ""
     }
 }

@@ -11,6 +11,7 @@ struct DashboardView: View {
 @State private var distributionMode: DistributionChartMode = .pie
 @State private var selectedDistributionRootId: Int?
 @State private var isCustomRangeActive = false
+@State private var isShowingAllBudgets = false
 
 var body: some View {
     NavigationStack {
@@ -56,6 +57,7 @@ var body: some View {
                 },
                 onSelectPinnedRange: { range, dimension in
                     isCustomRangeActive = true
+                    isShowingAllBudgets = false
                     Task {
                         await store.refreshDashboard(customRange: range, granularity: dimension)
                     }
@@ -70,6 +72,7 @@ var body: some View {
             await store.bootstrapIfNeeded()
             await reload()
         }
+        .onChange(of: preset) { _, _ in isShowingAllBudgets = false }
         .refreshable {
             await reload()
             await store.loadTransactions()
@@ -589,15 +592,35 @@ private var summaryGrid: some View {
     }
 
     private var budgetsSection: some View {
-        SectionCard(title: "预算跟踪", subtitle: "显示预算结余与占比卡片") {
+        SectionCard(title: "预算跟踪", subtitle: budgetSectionSubtitle) {
             if visibleBudgets.isEmpty {
                 ContentUnavailableView("暂无预算", systemImage: "wallet.pass")
             } else {
-                VStack(spacing: 14) {
-                    ForEach(visibleBudgets) { budget in
+                VStack(spacing: 12) {
+                    ForEach(budgetsToDisplay) { budget in
                         BudgetStatusCard(item: budget)
                     }
+                    if orderedVisibleBudgets.count > 3 {
+                        Button {
+                            withAnimation(.snappy(duration: 0.25)) {
+                                isShowingAllBudgets.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(isShowingAllBudgets ? "收起预算" : "查看其余 \(orderedVisibleBudgets.count - 3) 个预算")
+                                Image(systemName: isShowingAllBudgets ? "chevron.up" : "chevron.down")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.blue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+                .animation(.snappy(duration: 0.25), value: isShowingAllBudgets)
             }
         }
     }
@@ -662,15 +685,39 @@ private var summaryGrid: some View {
     }
 
     private var remainingBudget: Double {
-        visibleBudgets.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
+        visibleBudgets.filter { $0.parentBudgetId == nil }.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
     }
 
     private var visibleBudgets: [BudgetItem] {
         let window = isCustomRangeActive ? store.activeCustomRange.resolvedWindow : preset.dateRangePreset.resolve()
-        return store.budgets.filter { budget in
+        let year = Calendar.current.component(.year, from: window.start)
+        let periodBudgets = LocalAnalytics.monthlyBudgetPeriods(budgets: store.budgets, transactions: store.transactions, categories: store.flattenedCategories, year: year, links: store.transactionLedgerLinks)
+        return periodBudgets.filter { budget in
             let interval = budgetActiveInterval(budget)
-            return interval.start < window.end && interval.end >= window.start
+            return LocalAnalytics.dateWindowsOverlap(interval, window)
         }
+    }
+
+    private var orderedVisibleBudgets: [BudgetItem] {
+        visibleBudgets.sorted { lhs, rhs in
+            if lhs.usageRatio != rhs.usageRatio {
+                return lhs.usageRatio > rhs.usageRatio
+            }
+            let lhsEnd = budgetActiveInterval(lhs).end
+            let rhsEnd = budgetActiveInterval(rhs).end
+            if lhsEnd != rhsEnd { return lhsEnd < rhsEnd }
+            return (lhs.categoryName ?? lhs.name).localizedStandardCompare(rhs.categoryName ?? rhs.name) == .orderedAscending
+        }
+    }
+
+    private var budgetsToDisplay: [BudgetItem] {
+        isShowingAllBudgets ? orderedVisibleBudgets : Array(orderedVisibleBudgets.prefix(3))
+    }
+
+    private var budgetSectionSubtitle: String {
+        guard !visibleBudgets.isEmpty else { return "仅显示覆盖当前统计时间范围的预算" }
+        let rootCount = visibleBudgets.filter { $0.parentBudgetId == nil }.count
+        return "当前范围 \(rootCount) 条规则 · 按月展开 · 超支与高使用率优先"
     }
 
     private func budgetActiveInterval(_ budget: BudgetItem) -> DateWindow {
@@ -1723,12 +1770,25 @@ struct BudgetStatusCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(item.name)
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(periodLabel)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.blue)
+                }
                 Spacer()
-                Text("\(item.spentAmount.cnyText) / \(item.limitAmount.cnyText)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(item.spentAmount.cnyText) / \(item.limitAmount.cnyText)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    if item.parentBudgetId != nil {
+                        Text("子预算")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             ProgressView(value: min(max(item.usageRatio, 0), 1))
             HStack {
@@ -1743,6 +1803,23 @@ struct BudgetStatusCard: View {
         }
         .padding(14)
         .glassCard(cornerRadius: 16, strokeOpacity: 0.22)
+    }
+
+    private var periodLabel: String {
+        if item.periodType == "range" {
+            let start = item.startDate?.formatted(date: .abbreviated, time: .omitted)
+            let end = item.endDate?.formatted(date: .abbreviated, time: .omitted)
+            switch (start, end) {
+            case let (.some(start), .some(end)): return "\(start) – \(end)"
+            case let (.some(start), .none): return "自 \(start) 起"
+            case let (.none, .some(end)): return "截至 \(end)"
+            case (.none, .none): return "自定义周期"
+            }
+        }
+        if let month = item.month {
+            return "\(item.year)年\(month)月"
+        }
+        return "月度预算"
     }
 }
 /*

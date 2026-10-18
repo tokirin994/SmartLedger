@@ -6,19 +6,30 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_NAME="SmartLedger"
 BUILD_DIR="$SCRIPT_DIR/build"
-WORK_DIR="/tmp/${PROJECT_NAME}-ipa-source"
-ARCHIVE_PATH="/tmp/${PROJECT_NAME}-unsigned.xcarchive"
-DERIVED_DATA="/tmp/${PROJECT_NAME}-ipa-derived-data"
-PAYLOAD_DIR="/tmp/${PROJECT_NAME}-ipa-payload"
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/${PROJECT_NAME}-ipa.XXXXXX")"
+WORK_DIR="$WORK_ROOT/source"
+ARCHIVE_PATH="$WORK_ROOT/${PROJECT_NAME}.xcarchive"
+DERIVED_DATA="$WORK_ROOT/DerivedData"
+PAYLOAD_DIR="$WORK_ROOT/package"
+XCODEBUILD_LOG="$WORK_ROOT/xcodebuild.log"
 IPA_PATH="$BUILD_DIR/${PROJECT_NAME}-unsigned.ipa"
+TEMP_IPA="$WORK_ROOT/${PROJECT_NAME}-unsigned.ipa"
 
-rm -rf "$WORK_DIR" "$ARCHIVE_PATH" "$DERIVED_DATA" "$PAYLOAD_DIR"
-mkdir -p "$BUILD_DIR" "$PAYLOAD_DIR/Payload"
+cleanup() {
+  rm -rf "$WORK_ROOT"
+}
+trap cleanup EXIT
 
-# 共享目录上的 Xcode workspace 偶发无法读取；复制到本机 /tmp 后构建更稳定。
-ditto "$SCRIPT_DIR" "$WORK_DIR"
+mkdir -p "$BUILD_DIR" "$WORK_DIR" "$PAYLOAD_DIR/Payload"
 
-xcodebuild \
+# 共享目录上的 Xcode workspace 偶发无法读取；只复制源码到独立临时目录，
+# 避免把旧 build、缓存和 IPA 再次复制进构建输入。
+rsync -a \
+  --exclude '/build/' \
+  --exclude '/.DS_Store' \
+  "$SCRIPT_DIR/" "$WORK_DIR/"
+
+if ! xcodebuild \
   -project "$WORK_DIR/${PROJECT_NAME}.xcodeproj" \
   -scheme "$PROJECT_NAME" \
   -configuration Release \
@@ -28,11 +39,21 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
   archive \
-  -archivePath "$ARCHIVE_PATH"
+  -archivePath "$ARCHIVE_PATH" >"$XCODEBUILD_LOG" 2>&1; then
+  cat "$XCODEBUILD_LOG"
+  exit 1
+fi
 
-cp -R "$ARCHIVE_PATH/Products/Applications/${PROJECT_NAME}.app" "$PAYLOAD_DIR/Payload/"
-rm -f "$IPA_PATH"
-(cd "$PAYLOAD_DIR" && /usr/bin/zip -qry "$IPA_PATH" Payload)
+APP_PATH="$ARCHIVE_PATH/Products/Applications/${PROJECT_NAME}.app"
+if [[ ! -d "$APP_PATH" ]]; then
+  echo "归档成功但未找到应用：$APP_PATH" >&2
+  exit 1
+fi
+
+cp -R "$APP_PATH" "$PAYLOAD_DIR/Payload/"
+(cd "$PAYLOAD_DIR" && /usr/bin/zip -qry "$TEMP_IPA" Payload)
+/usr/bin/unzip -tq "$TEMP_IPA"
+mv -f "$TEMP_IPA" "$IPA_PATH"
 
 echo ""
 echo "IPA 已生成：$IPA_PATH"

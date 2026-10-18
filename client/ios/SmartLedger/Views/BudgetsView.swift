@@ -1,8 +1,23 @@
 import SwiftUI
 
+private enum BudgetEditorSheet: Identifiable {
+  case create
+  case edit(BudgetItem)
+  case child(BudgetItem)
+
+  var id: String {
+    switch self {
+    case .create: return "create"
+    case .edit(let item): return "edit-\(item.id)"
+    case .child(let item): return "child-\(item.id)"
+    }
+  }
+}
+
 struct BudgetView: View {
   @EnvironmentObject private var store: LedgerStore
-  @State private var showCreateSheet = false
+  @State private var activeSheet: BudgetEditorSheet?
+  @State private var deletingBudget: BudgetItem?
 
   var body: some View {
     ScrollView {
@@ -19,15 +34,28 @@ struct BudgetView: View {
 .toolbar {
      ToolbarItem(placement: .topBarTrailing) {
        Button {
-         showCreateSheet = true
+         activeSheet = .create
        } label: {
          Image(systemName: "plus")
        }
      }
    }
-   .sheet(isPresented: $showCreateSheet) {
-     CreateBudgetView()
-       .environmentObject(store)
+   .sheet(item: $activeSheet) { sheet in
+     switch sheet {
+     case .create:
+       CreateBudgetView().environmentObject(store)
+     case .edit(let item):
+       CreateBudgetView(existingBudget: item, parentBudget: parentBudget(for: item)).environmentObject(store)
+     case .child(let parent):
+       CreateBudgetView(parentBudget: parent).environmentObject(store)
+     }
+   }
+   .confirmationDialog("删除预算规则？", isPresented: Binding(get: { deletingBudget != nil }, set: { if !$0 { deletingBudget = nil } }), titleVisibility: .visible) {
+     Button("删除规则及子预算", role: .destructive) {
+       if let item = deletingBudget { Task { await store.deleteBudget(id: item.id) } }
+     }
+   } message: {
+     Text("删除“\(deletingBudget?.name ?? "预算")”会同时删除其下的子预算规则。历史流水不会受影响。")
    }
    .task {
      if store.overview == nil {
@@ -37,6 +65,11 @@ struct BudgetView: View {
    .refreshable {
      await store.refreshDashboard(range: store.activeRangePreset, granularity: store.activeGranularity)
    }
+ }
+
+ private func parentBudget(for item: BudgetItem) -> BudgetItem? {
+   guard let parentId = item.parentBudgetId else { return nil }
+   return store.budgets.first { $0.id == parentId }
  }
 
  private var budgetSummary: some View {
@@ -70,20 +103,47 @@ struct BudgetView: View {
      ContentUnavailableView("暂无预算", systemImage: "wallet.pass")
    } else {
      VStack(spacing: 14) {
-       ForEach(store.budgets) { item in
-         BudgetStatCard(item: item)
+       ForEach(store.budgets.filter { $0.parentBudgetId == nil }) { item in
+         budgetRuleCard(item)
+         ForEach(store.budgets.filter { $0.parentBudgetId == item.id }) { child in
+           budgetRuleCard(child, isChild: true)
+         }
        }
      }
    }
  }
 
+ @ViewBuilder
+ private func budgetRuleCard(_ item: BudgetItem, isChild: Bool = false) -> some View {
+   VStack(alignment: .trailing, spacing: 6) {
+     HStack {
+       if isChild { Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary) }
+       BudgetStatCard(item: item)
+       Menu {
+         Button("编辑规则", systemImage: "pencil") { activeSheet = .edit(item) }
+         if !isChild {
+           Button("添加子预算", systemImage: "plus") { activeSheet = .child(item) }
+         }
+         Button("删除", systemImage: "trash", role: .destructive) { deletingBudget = item }
+       } label: {
+         Image(systemName: "ellipsis.circle.fill")
+           .font(.title3)
+           .foregroundStyle(.secondary)
+           .padding(.leading, 4)
+       }
+     }
+     .padding(.leading, isChild ? 18 : 0)
+   }
+ }
+
  private var totalRemaining: Double {
-   store.budgets.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
+   store.budgets.filter { $0.parentBudgetId == nil }.reduce(0) { $0 + max($1.limitAmount - $1.spentAmount, 0) }
  }
 
  private var usageSummary: String {
-   let totalLimit = store.budgets.reduce(0.0) { $0 + $1.limitAmount }
-   let totalSpent = store.budgets.reduce(0.0) { $0 + $1.spentAmount }
+   let roots = store.budgets.filter { $0.parentBudgetId == nil }
+   let totalLimit = roots.reduce(0.0) { $0 + $1.limitAmount }
+   let totalSpent = roots.reduce(0.0) { $0 + $1.spentAmount }
    guard totalLimit > 0 else { return "等待创建预算" }
    return "已用 \((totalSpent / totalLimit * 100).formatted(.number.precision(.fractionLength(1))))%"
  }
@@ -98,7 +158,7 @@ struct BudgetStatCard: View {
        VStack(alignment: .leading, spacing: 4) {
          Text(item.name)
            .font(.headline)
-         Text(item.categoryName ?? "总预算")
+         Text(item.categoryName ?? (item.keyword.map { "关键词：\($0)" } ?? (item.parentBudgetId == nil ? "总预算" : "继承主预算范围")))
            .font(.caption)
            .foregroundStyle(.secondary)
        }
@@ -177,15 +237,32 @@ struct BudgetStatCard: View {
 private struct CreateBudgetView: View {
  @EnvironmentObject private var store: LedgerStore
  @Environment(\.dismiss) private var dismiss
+ private let existingBudget: BudgetItem?
+ private let parentBudget: BudgetItem?
 
- @State private var name = ""
- @State private var amount = ""
- @State private var budgetMode: BudgetMode = .monthlyUnlimited
+ @State private var name: String
+ @State private var amount: String
+ @State private var budgetMode: BudgetMode
  @State private var categoryId: Int?
- @State private var targetMonth = Date()
- @State private var startDate = Date()
- @State private var endDate = Calendar.current.date(byAdding: .month, value: 1, to: Date()) ?? Date()
- @State private var hasEndDate = false
+ @State private var selectedCategoryIds: Set<Int>
+ @State private var keyword: String
+ @State private var startDate: Date
+ @State private var endDate: Date
+ @State private var hasEndDate: Bool
+
+ init(existingBudget: BudgetItem? = nil, parentBudget: BudgetItem? = nil) {
+   self.existingBudget = existingBudget
+   self.parentBudget = parentBudget
+   _name = State(initialValue: existingBudget?.name ?? "")
+   _amount = State(initialValue: existingBudget.map { String($0.limitAmount) } ?? "")
+   _budgetMode = State(initialValue: (existingBudget?.periodType ?? parentBudget?.periodType) == "range" ? .range : .monthlyUnlimited)
+   _categoryId = State(initialValue: existingBudget?.categoryId)
+   _selectedCategoryIds = State(initialValue: Set(existingBudget?.categoryIds ?? []))
+   _keyword = State(initialValue: existingBudget?.keyword ?? "")
+   _startDate = State(initialValue: existingBudget?.startDate ?? parentBudget?.startDate ?? Date())
+   _endDate = State(initialValue: existingBudget?.endDate ?? parentBudget?.endDate ?? Calendar.current.date(byAdding: .month, value: 1, to: Date()) ?? Date())
+   _hasEndDate = State(initialValue: existingBudget?.endDate != nil || parentBudget?.endDate != nil)
+ }
 
  var body: some View {
    NavigationStack {
@@ -209,31 +286,66 @@ private struct CreateBudgetView: View {
          if hasEndDate {
            DatePicker("结束时间", selection: $endDate, in: startDate..., displayedComponents: .date)
          }
-         if budgetMode == .monthlyUnlimited {
-           Text("系统会把这条预算作为按月滚动模板，仅展示当前月；到下月自动按相同额度进入下一周期。")
+       if budgetMode == .monthlyUnlimited {
+           Text("按月规则会自动生成月度统计；年度视图会展开为各月预算进度。")
              .font(.footnote).foregroundStyle(.secondary)
          }
        }
 
-       Section("分类") {
-         Picker("分类 (可选)", selection: $categoryId) {
-           Text("总预算").tag(nil as Int?)
-           ForEach(budgetCategoryOptions) { category in
-             Text(category.displayName).tag(Int?(category.id))
-           }
+        if let parentBudget {
+          Section("子预算范围") {
+            Text("归属主预算：\(parentBudget.name)")
+              .foregroundStyle(.secondary)
+            Text("选择一个或多个分类；每个分类会包含其下级分类。子预算只用于细分跟踪，不重复计入总预算剩余额度。")
+              .font(.footnote).foregroundStyle(.secondary)
+            TextField("可选：标题/商户/备注关键词", text: $keyword)
+            Text("填写关键词后，只统计标题、商户、备注或支付渠道中包含该词的流水；分类与关键词可组合。")
+              .font(.footnote).foregroundStyle(.secondary)
+            ForEach(store.flattenedCategories.filter { $0.flowType == .expense }) { category in
+              Button {
+                if selectedCategoryIds.contains(category.id) { selectedCategoryIds.remove(category.id) }
+                else { selectedCategoryIds.insert(category.id) }
+              } label: {
+                HStack(spacing: 10) {
+                  Text(String(repeating: "　", count: max(category.level - 1, 0)))
+                  Text(category.name)
+                  Spacer()
+                  if selectedCategoryIds.contains(category.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+            }
+            if selectedCategoryIds.isEmpty {
+              Text("未选择分类时，该子预算按主预算范围全部支出计算。")
+                .font(.footnote).foregroundStyle(.orange)
+            }
+          }
+        } else {
+         Section("分类") {
+          HierarchicalCategoryPicker(
+            title: "预算分类",
+            categories: store.categories.filter { $0.flowType == .expense },
+            placeholder: "总预算",
+            helperText: "不选择分类时按全部支出计算。",
+            selectedCategoryId: $categoryId,
+            flowType: .expense,
+            onCreateCategory: nil
+          )
          }
-       }
+        }
      }
-     .scrollDismissesKeyboard(.interactively)
-     .navigationTitle("新建预算")
-     .dismissKeyboardWhenTappedOutside()
-     .toolbar {
+      .scrollDismissesKeyboard(.interactively)
+      .navigationTitle(existingBudget == nil ? (parentBudget == nil ? "新建预算" : "添加子预算") : "编辑预算规则")
+      .dismissKeyboardWhenTappedOutside()
+      .task { if store.categories.isEmpty { await store.loadCategories() } }
+      .toolbar {
        ToolbarItem(placement: .topBarLeading) {
          Button("取消") { dismiss() }
        }
        ToolbarItem(placement: .topBarTrailing) {
          Button("保存") {
-           createBudget()
+           saveBudget()
          }
          .disabled(Double(amount) == nil)
        }
@@ -241,30 +353,30 @@ private struct CreateBudgetView: View {
    }
  }
 
- private var budgetCategoryOptions: [LedgerCategory] {
-   store.flattenedCategories.filter { $0.flowType == .expense && $0.level <= 1 }.sorted { $0.displayName < $1.displayName }
- }
-
- private var categoryName: String? {
-   store.flattenedCategories.first(where: { $0.id == categoryId })?.name
- }
-
- private func createBudget() {
+ private func saveBudget() {
    guard let limit = Double(amount) else { return }
-   let monthComponents = Calendar.current.dateComponents([.year, .month], from: targetMonth)
+   let monthComponents = Calendar.current.dateComponents([.year, .month], from: startDate)
+   let normalizedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
    let draft = BudgetDraft(
-     name: name.isEmpty ? "新增预算" : name,
+     name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "新增预算" : name.trimmingCharacters(in: .whitespacesAndNewlines),
      limitAmount: limit,
-     periodType: budgetMode.periodType,
+     periodType: existingBudget?.periodType ?? parentBudget?.periodType ?? budgetMode.periodType,
      year: monthComponents.year ?? Calendar.current.component(.year, from: Date()),
      month: nil,
      startDate: startDate,
      endDate: hasEndDate ? endDate : nil,
-     categoryId: categoryId
+     categoryId: parentBudget == nil ? categoryId : nil,
+     parentBudgetId: parentBudget?.id,
+     categoryIds: parentBudget == nil ? nil : Array(selectedCategoryIds).sorted(),
+     keyword: parentBudget == nil || normalizedKeyword.isEmpty ? nil : normalizedKeyword
    )
 
    Task {
-     await store.createBudget(draft)
+     if let existingBudget {
+       await store.updateBudget(id: existingBudget.id, draft: draft)
+     } else {
+       await store.createBudget(draft)
+     }
      dismiss()
    }
  }
@@ -290,3 +402,19 @@ enum BudgetMode: String, CaseIterable, Identifiable {
    }
  }
 }
+/* Removed invalid pre-existing trailing fragment. */
+
+/*
+ange: return "range"
+   }
+ }
+}
+
+}
+*/
+/*
+ }
+}
+
+}
+*/

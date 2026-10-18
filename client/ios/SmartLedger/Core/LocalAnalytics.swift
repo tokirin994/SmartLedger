@@ -1,6 +1,11 @@
 import Foundation
 
 enum LocalAnalytics {
+  static func dateWindowsOverlap(_ lhs: DateWindow, _ rhs: DateWindow) -> Bool {
+    // Date windows are half-open [start, end), so touching at a boundary is not overlap.
+    lhs.start < rhs.end && rhs.start < lhs.end
+  }
+
   static func computeBudgetProgress(transactions: [LedgerTransaction], categories: [LedgerCategory], budgets: [BudgetItem], links: [TransactionLedgerLink] = []) -> [BudgetItem] {
     budgets.map { budget in
       let periodStart: Date
@@ -25,7 +30,7 @@ enum LocalAnalytics {
       let isWithinConfiguredRange = (budget.startDate.map { periodEnd > $0 } ?? true) && (budget.endDate.map { periodStart <= $0 } ?? true)
       let spent = isWithinConfiguredRange ? transactions.filter { tx in
         tx.kind == .expense && tx.happenedAt >= periodStart && tx.happenedAt < periodEnd &&
-        matchBudgetCategory(tx: tx, budget: budget, categories: categories)
+        matchBudgetCategory(tx: tx, budget: budget, budgets: budgets, categories: categories)
       }.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) } : 0
 
       let ratio = budget.limitAmount > 0 ? spent / budget.limitAmount : 0
@@ -34,15 +39,45 @@ enum LocalAnalytics {
         name: budget.name,
         limitAmount: budget.limitAmount,
         periodType: budget.periodType,
-        categoryId: budget.categoryId,
-        categoryName: budget.categoryName,
         year: budget.year,
         month: budget.month,
         startDate: budget.startDate,
         endDate: budget.endDate,
+        categoryId: budget.categoryId,
+        categoryName: budget.categoryName,
         spentAmount: (spent * 100).rounded() / 100.0,
-        usageRatio: ratio
+        usageRatio: ratio,
+        parentBudgetId: budget.parentBudgetId,
+        categoryIds: budget.categoryIds,
+        keyword: budget.keyword,
       )
+    }
+  }
+
+  /// Expands recurring monthly templates into read-only month instances for a selected year.
+  /// Persisted rules remain templates; these derived instances are only used by analytics/UI.
+  static func monthlyBudgetPeriods(budgets: [BudgetItem], transactions: [LedgerTransaction], categories: [LedgerCategory], year: Int, links: [TransactionLedgerLink] = [], now: Date = .now) -> [BudgetItem] {
+    let calendar = Calendar.current
+    return budgets.flatMap { rule -> [BudgetItem] in
+      guard rule.periodType == "monthly", rule.month == nil else { return [rule] }
+      let firstMonth = calendar.dateComponents([.year, .month], from: rule.startDate ?? calendar.date(from: DateComponents(year: rule.year, month: 1, day: 1)) ?? now)
+      let lowerBound = firstMonth.year == year ? max(firstMonth.month ?? 1, 1) : 1
+      let currentYear = calendar.component(.year, from: now)
+      let upperBound = year < currentYear ? 12 : (year > currentYear ? 0 : calendar.component(.month, from: now))
+      guard lowerBound <= upperBound else { return [] }
+      return (lowerBound...upperBound).compactMap { month in
+        guard let monthStart = calendar.date(from: DateComponents(year: year, month: month, day: 1)),
+              let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) else { return nil }
+        let effectiveStart = max(monthStart, rule.startDate ?? monthStart)
+        let effectiveEnd = min(nextMonth, rule.endDate.map { calendar.date(byAdding: .day, value: 1, to: $0) ?? $0 } ?? nextMonth)
+        guard effectiveStart < effectiveEnd else { return nil }
+        let spent = transactions.filter { tx in
+          tx.kind == .expense && tx.happenedAt >= effectiveStart && tx.happenedAt < effectiveEnd && matchBudgetCategory(tx: tx, budget: rule, budgets: budgets, categories: categories)
+        }.reduce(0.0) { $0 + selfShareAmount(for: $1, links: links) }
+        let periodKey = year * 12 + month
+        let syntheticId = -(abs(rule.id) * 10_000 + periodKey)
+        return BudgetItem(id: syntheticId, name: rule.name, limitAmount: rule.limitAmount, periodType: rule.periodType, year: year, month: month, startDate: effectiveStart, endDate: effectiveEnd, categoryId: rule.categoryId, categoryName: rule.categoryName, spentAmount: (spent * 100).rounded() / 100, usageRatio: rule.limitAmount > 0 ? spent / rule.limitAmount : 0, parentBudgetId: rule.parentBudgetId, categoryIds: rule.categoryIds, keyword: rule.keyword)
+      }
     }
   }
 
@@ -169,15 +204,32 @@ enum LocalAnalytics {
     }
   }
 
-  private static func matchBudgetCategory(tx: LedgerTransaction, budget: BudgetItem, categories: [LedgerCategory]) -> Bool {
-    guard let categoryId = budget.categoryId else { return true }
+  private static func matchBudgetCategory(tx: LedgerTransaction, budget: BudgetItem, budgets: [BudgetItem], categories: [LedgerCategory]) -> Bool {
+    if let parentId = budget.parentBudgetId, let parent = budgets.first(where: { $0.id == parentId }) {
+      guard matchesCategoryScope(tx: tx, selectedIds: parent.categoryIds, categoryId: parent.categoryId, categories: categories),
+            matchesKeyword(tx: tx, keyword: parent.keyword) else { return false }
+    }
+    guard matchesCategoryScope(tx: tx, selectedIds: budget.categoryIds, categoryId: budget.categoryId, categories: categories) else { return false }
+    return matchesKeyword(tx: tx, keyword: budget.keyword)
+  }
+
+  private static func matchesKeyword(tx: LedgerTransaction, keyword: String?) -> Bool {
+    guard let keyword = keyword?.trimmingCharacters(in: .whitespacesAndNewlines), !keyword.isEmpty else { return true }
+    let fields = [tx.title, tx.merchant ?? "", tx.note ?? "", tx.paymentMethod ?? ""]
+    return fields.contains { $0.localizedCaseInsensitiveContains(keyword) }
+  }
+
+  private static func matchesCategoryScope(tx: LedgerTransaction, selectedIds: [Int]?, categoryId: Int?, categories: [LedgerCategory]) -> Bool {
+    let selectedIds = selectedIds ?? categoryId.map { [$0] }
+    guard let selectedIds, !selectedIds.isEmpty else { return true }
     guard let txCategoryId = tx.categoryId else { return false }
-    if txCategoryId == categoryId { return true }
-    // Budgeting/statistics follow the same downward-compatible semantics as
-    // the transaction filter: selecting any category includes all descendants.
-    guard let selected = categories.first(where: { $0.id == categoryId }),
-          let transactionCategory = categories.first(where: { $0.id == txCategoryId }) else { return false }
-    return transactionCategory.pathComponents.starts(with: selected.pathComponents)
+    return selectedIds.contains { categoryId in
+      if txCategoryId == categoryId { return true }
+      // Selecting a category includes its descendants.
+      guard let selected = categories.first(where: { $0.id == categoryId }),
+            let transactionCategory = categories.first(where: { $0.id == txCategoryId }) else { return false }
+      return transactionCategory.pathComponents.starts(with: selected.pathComponents)
+    }
   }
 
   private static func rootCategoryName(for tx: LedgerTransaction, categories: [LedgerCategory]) -> String {
